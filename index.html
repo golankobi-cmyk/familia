@@ -1261,22 +1261,27 @@ const SUPABASE_USER_ID = 'kobi';
 
 let supabaseClient = null;
 
-// Wait for Supabase library to load from CDN
-function initSupabase() {
-  if (window.supabase && window.supabase.createClient) {
-    try {
-      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      console.log('Supabase initialized successfully');
-    } catch(e) {
-      console.warn('Supabase init error:', e);
+// Returns a promise that resolves when Supabase is ready (or times out after 5s)
+const supabaseReady = new Promise((resolve) => {
+  const start = Date.now();
+  function check() {
+    if (window.supabase && window.supabase.createClient) {
+      try {
+        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        console.log('Supabase initialized successfully');
+      } catch(e) {
+        console.warn('Supabase init error:', e);
+      }
+      resolve(supabaseClient);
+    } else if (Date.now() - start > 5000) {
+      console.warn('Supabase CDN timed out, using localStorage only');
+      resolve(null);
+    } else {
+      setTimeout(check, 100);
     }
-  } else {
-    setTimeout(initSupabase, 100);
   }
-}
-
-// Start initialization immediately
-initSupabase();
+  check();
+});
 
 // ==== DATA ====
 const NAV = [
@@ -6628,6 +6633,9 @@ async function saveState() {
 async function loadState() {
   console.log('loadState() starting...');
   
+  // Wait for Supabase to be fully ready
+  await supabaseReady;
+  
   let loaded = false;
   
   // Try Supabase first
@@ -6641,7 +6649,7 @@ async function loadState() {
       
       if (!error && data && data.length > 0 && data[0].payload) {
         const supabaseData = data[0].payload;
-        // Only use if it has real data (API key OR significant progress)
+        // Only use if it has real data
         if (supabaseData.claudeApiKey || (supabaseData.course && Object.keys(supabaseData.course).length > 0)) {
           console.log('✓ Loaded valid data from Supabase');
           Object.assign(STATE, supabaseData);
@@ -6651,6 +6659,7 @@ async function loadState() {
         }
       } else {
         console.log('No Supabase data found, trying localStorage');
+        if (error) console.warn('Supabase error:', error.message);
       }
     } catch(e) {
       console.log('Supabase unavailable:', e.message);
