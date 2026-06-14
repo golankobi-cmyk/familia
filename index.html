@@ -848,6 +848,23 @@ html[data-theme="dark"] .dialogue-avatar { background: var(--accent); color: #ff
 .settings-group-body { padding: 4px 24px 18px; }
 .settings-group-body .settings-row:first-child { padding-top: 12px; }
 html[data-theme="dark"] .settings-group { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.07); }
+.set-cat-list { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+.set-cat-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; text-align: left; background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--r-md); padding: 22px 24px; cursor: pointer; transition: transform 0.16s var(--ease), box-shadow 0.16s var(--ease), border-color 0.16s var(--ease); }
+.set-cat-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); border-color: var(--ink-4); }
+.set-cat-card-title { font-weight: 600; font-size: 16px; color: var(--ink); margin-bottom: 3px; }
+.set-cat-card-desc { font-size: 13px; color: var(--ink-3); }
+.set-cat-card-chev { color: var(--ink-4); font-size: 22px; flex-shrink: 0; line-height: 1; }
+html[data-theme="dark"] .set-cat-card { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.07); }
+.set-back { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 14px; font-weight: 500; background: none; border: none; cursor: pointer; padding: 0; margin-bottom: 10px; }
+.set-back:hover { text-decoration: underline; }
+.key-field { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+.key-input { flex: 1; min-width: 0; padding: 11px 14px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 9px; font-family: var(--mono); font-size: 13px; color: var(--ink); letter-spacing: 0.02em; }
+.key-input:focus { outline: none; border-color: var(--accent); background: var(--bg-card); }
+.key-status { font-size: 12.5px; font-weight: 600; white-space: nowrap; flex-shrink: 0; color: var(--ink-3); }
+.key-status.ok { color: var(--leaf); }
+.key-status.warn { color: var(--accent); }
+.prep-bar { height: 8px; background: var(--bg-2); border-radius: 999px; overflow: hidden; margin: 8px 0; }
+.prep-bar-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.25s var(--ease); }
 .settings-select { padding: 8px 14px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 9px; font-family: var(--display); font-size: 13px; color: var(--ink-1); cursor: pointer; max-width: 280px; }
 .settings-select:focus { outline: none; border-color: var(--accent); background: var(--bg-card); }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--line-2); }
@@ -968,7 +985,9 @@ html[data-theme="dark"] .settings-group { background: rgba(255,255,255,0.04); bo
   .today-item-sub { font-size: 12.5px; }
   /* Settings */
   .settings-section { padding: 18px; }
-  .settings-group-head { padding: 14px 18px; }
+  .key-field { flex-direction: column; align-items: stretch; gap: 8px; }
+  .key-status { align-self: flex-end; }
+  .set-cat-card { padding: 18px; }
   .settings-group-body { padding: 4px 18px 14px; }
   .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px 0; }
   .settings-time { width: 100%; justify-content: space-between; }
@@ -1416,7 +1435,6 @@ body {
     <nav class="nav-bar" id="nav-bar"></nav>
     <div class="topbar-right">
       <div class="stat-chip"><span class="stat-chip-dot"></span><span id="streak-mini">0</span><span style="opacity:0.5">·</span><span id="words-mini">0</span></div>
-      <button class="icon-btn settings-btn" onclick="navHome('settings')" title="Settings"><span class="settings-icon">⚙</span><span class="settings-label">Settings</span></button>
     </div>
   </div>
 </header>
@@ -1512,7 +1530,8 @@ const NAV = [
   { id: 'sicilian', label: 'Sicilian' },
   { id: 'music', label: 'Music' },
   { id: 'parlare', label: 'Parlare' },
-  { id: 'pronunciation', label: 'Pronunciation' }
+  { id: 'pronunciation', label: 'Pronunciation' },
+  { id: 'settings', label: 'Settings' }
 ];
 
 // All translations verified: both sides agree on possessive presence
@@ -7625,6 +7644,8 @@ const STATE = {
   storiesTab: 'all',
   storyGroupsOpen: null,
   settingsGroupsOpen: null,
+  settingsPage: null,
+  loadedNeuralVoices: null,
   vocabFilter: 'all',
   vocabSearch: '',
   vocabSort: 'fragility',
@@ -8916,6 +8937,7 @@ function navBack() {
 }
 function navHome(view, ctx) {
   STATE.contextStack = []; STATE.view = view; STATE.context = ctx || null;
+  if (view === 'settings') STATE.settingsPage = null;
   if (showSkeleton(view)) { rafRender(); } else { render(); window.scrollTo({ top: 0, behavior: 'auto' }); }
 }
 
@@ -8930,12 +8952,16 @@ let ttsWarmed = false;
 // existing Web Speech path unchanged. Any failure (no key, offline and not cached,
 // quota or budget error) falls back to Web Speech, so the user never gets silence. =====
 const NEURAL_TTS_VOICES = [
-  { name: 'it-IT-Neural2-A', label: 'Neural2 A (female)' },
-  { name: 'it-IT-Neural2-C', label: 'Neural2 C (male)' },
-  { name: 'it-IT-Standard-A', label: 'Standard A (female)' },
-  { name: 'it-IT-Standard-B', label: 'Standard B (male)' },
-  { name: 'it-IT-Standard-C', label: 'Standard C (male)' },
-  { name: 'it-IT-Standard-D', label: 'Standard D (female)' }
+  { name: 'it-IT-Neural2-A', label: 'Neural2 · A · female' },
+  { name: 'it-IT-Neural2-C', label: 'Neural2 · C · male' },
+  { name: 'it-IT-Wavenet-A', label: 'WaveNet · A · female' },
+  { name: 'it-IT-Wavenet-B', label: 'WaveNet · B · male' },
+  { name: 'it-IT-Wavenet-C', label: 'WaveNet · C · male' },
+  { name: 'it-IT-Wavenet-D', label: 'WaveNet · D · female' },
+  { name: 'it-IT-Standard-A', label: 'Standard · A · female' },
+  { name: 'it-IT-Standard-B', label: 'Standard · B · male' },
+  { name: 'it-IT-Standard-C', label: 'Standard · C · male' },
+  { name: 'it-IT-Standard-D', label: 'Standard · D · female' }
 ];
 function neuralTTSEnabled() {
   return !!(STATE.settings && STATE.settings.neuralTTS && (STATE.settings.googleTtsKey || '').trim());
@@ -9202,7 +9228,8 @@ function renderTopNav() {
     write:     `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14 3l3 3-9 9H5v-3z"/><line x1="3" y1="17" x2="17" y2="17"/></svg>`,
     sicilian:  `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="10" cy="10" r="7"/><path d="M10 3 Q14 8 10 13 Q6 8 10 3"/></svg>`,
     parlare:   `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5 Q3 3 5 3 L15 3 Q17 3 17 5 L17 11 Q17 13 15 13 L11 13 L8 17 L8 13 L5 13 Q3 13 3 11 Z"/><path d="M9 8 L9.01 8" stroke-width="2" stroke-linecap="round"/><path d="M11.5 7 Q12.5 8 11.5 9" stroke-width="1.2"/></svg>`,
-    music:     `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="15" r="2"/><circle cx="15" cy="13" r="2"/><path d="M9 15V5l8-2v10"/></svg>`
+    music:     `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="15" r="2"/><circle cx="15" cy="13" r="2"/><path d="M9 15V5l8-2v10"/></svg>`,
+    settings:  `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.6"/><path d="M10 1.6v2.2M10 16.2v2.2M3.1 3.1l1.6 1.6M15.3 15.3l1.6 1.6M1.6 10h2.2M16.2 10h2.2M3.1 16.9l1.6-1.6M15.3 4.7l1.6-1.6"/></svg>`
   };
   // Desktop sidebar nav (OPEN-5): same sections as the pills, vertical, reusing icons.
   const sideNav = document.getElementById('side-nav');
@@ -16463,187 +16490,342 @@ function renderParlareDrill() {
 
 // ==== SETTINGS ====
 function renderSettings() {
-  // Collect available Italian voices for picker
-  const allVoices = ('speechSynthesis' in window) ? window.speechSynthesis.getVoices() : [];
-  const itVoices = allVoices.filter(v => v.lang.startsWith('it'));
-  const currentRate = STATE.settings.ttsRate || 0.92;
-  const apiKeySet = !!STATE.claudeApiKey;
-  if (!STATE.settingsGroupsOpen) STATE.settingsGroupsOpen = { general: true, audio: false, conversa: false, backup: false, calibration: false, danger: false };
-  const sgOpen = (k) => STATE.settingsGroupsOpen[k] ? 'open' : '';
-  main.innerHTML = `
+  const page = STATE.settingsPage || null;
+  if (page === 'display') return renderSettingsDisplay();
+  if (page === 'audio') return renderSettingsAudio();
+  if (page === 'learning') return renderSettingsLearning();
+  if (page === 'account') return renderSettingsAccount();
+  return renderSettingsHome();
+}
+function settingsGo(page) { STATE.settingsPage = page; render(); window.scrollTo(0, 0); }
+function settingsBack() { STATE.settingsPage = null; render(); window.scrollTo(0, 0); }
+function settingsCatCard(page, title, desc) {
+  return `<button class="set-cat-card" onclick="settingsGo('${page}')">
+    <div><div class="set-cat-card-title">${title}</div><div class="set-cat-card-desc">${desc}</div></div>
+    <span class="set-cat-card-chev">›</span>
+  </button>`;
+}
+function settingsHeader(title) {
+  return `<button class="set-back" onclick="settingsBack()">← back to settings</button>
     <div class="eyebrow">Settings</div>
-    <h1 class="h1">Calibrate the experience.</h1>
-    <p class="lede">Changes reshape your daily session and what the system shows.</p>
-    <details class="settings-group" ${sgOpen('general')} ontoggle="STATE.settingsGroupsOpen.general=this.open">
-      <summary class="settings-group-head"><span class="settings-group-title">General</span></summary>
-      <div class="settings-group-body">
+    <h1 class="h1" style="margin-bottom:18px;">${title}</h1>`;
+}
+function renderSettingsHome() {
+  main.innerHTML = `
+    <div class="eyebrow">Settings · Private to you</div>
+    <h1 class="h1">Settings.</h1>
+    <p class="lede">Private to you. Saved on this device and synced across your devices.</p>
+    <div class="set-cat-list">
+      ${settingsCatCard('display', 'Display &amp; reading', 'Theme, motion, and the Sicilian module')}
+      ${settingsCatCard('audio', 'Audio &amp; voice', 'Voices, speed, neural audio and offline download')}
+      ${settingsCatCard('learning', 'Learning', 'Daily study goal and placement test')}
+      ${settingsCatCard('account', 'Account &amp; data', 'API keys, sync, backup and reset')}
+    </div>`;
+}
+function renderSettingsDisplay() {
+  main.innerHTML = `
+    ${settingsHeader('Display &amp; reading')}
+    <div class="settings-section" style="max-width:760px;">
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Daily target: minutes</div>
-          <div class="settings-row-desc">Sets today's session size.</div>
-        </div>
-        <div class="settings-time">
-          ${[10,20,30,45,60].map(m => `<button class="${STATE.settings.dailyMinutes===m?'active':''}" onclick="STATE.settings.dailyMinutes=${m}; saveState(); render()">${m}m</button>`).join('')}
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Theme</div><div class="settings-row-desc">Light, dark, or follow your device.</div></div>
+        <div class="settings-time">${[{v:'auto',l:'Auto'},{v:'light',l:'Light'},{v:'dark',l:'Dark'}].map(o => `<button class="${(STATE.settings.theme||'auto')===o.v?'active':''}" onclick="STATE.settings.theme='${o.v}'; saveState(); applyTheme(); render()">${o.l}</button>`).join('')}</div>
       </div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Sicilian module</div>
-          <div class="settings-row-desc">Optional Sicilian phrases tab.</div>
-        </div>
-        <div class="toggle ${STATE.settings.sicilianEnabled?'on':''}" onclick="STATE.settings.sicilianEnabled=!STATE.settings.sicilianEnabled; saveState(); render()"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Reduce motion</div>
-          <div class="settings-row-desc">Turns off loading shimmers and page fades. Also respects your device's reduce-motion setting.</div>
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Reduce motion</div><div class="settings-row-desc">Turns off loading shimmers and page fades. Also respects your device's reduce-motion setting.</div></div>
         <div class="toggle ${STATE.settings.reduceMotion?'on':''}" onclick="STATE.settings.reduceMotion=!STATE.settings.reduceMotion; saveState(); render()"></div>
       </div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Theme</div>
-          <div class="settings-row-desc">Light, dark, or follow your device.</div>
-        </div>
-        <div class="settings-time">
-          ${[{v:'auto',l:'Auto'},{v:'light',l:'Light'},{v:'dark',l:'Dark'}].map(o => `<button class="${(STATE.settings.theme||'auto')===o.v?'active':''}" onclick="STATE.settings.theme='${o.v}'; saveState(); applyTheme(); render()">${o.l}</button>`).join('')}
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Sicilian module</div><div class="settings-row-desc">Adds an optional Sicilian phrases tab to the menu.</div></div>
+        <div class="toggle ${STATE.settings.sicilianEnabled?'on':''}" onclick="STATE.settings.sicilianEnabled=!STATE.settings.sicilianEnabled; saveState(); render()"></div>
       </div>
-      </div>
-    </details>
-    <details class="settings-group" ${sgOpen('audio')} ontoggle="STATE.settingsGroupsOpen.audio=this.open">
-      <summary class="settings-group-head"><span class="settings-group-title">Italian audio</span></summary>
-      <div class="settings-group-body">
+    </div>`;
+}
+function renderSettingsLearning() {
+  main.innerHTML = `
+    ${settingsHeader('Learning')}
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Daily study goal</div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Neural voice (online)</div>
-          <div class="settings-row-desc">Use Google's it-IT Standard and Neural2 voices. Each clip is synthesized once, cached on your device, then replayed offline. Falls back to the device voice if a clip is not cached and you are offline.</div>
-        </div>
-        <div class="toggle ${STATE.settings.neuralTTS?'on':''}" onclick="STATE.settings.neuralTTS=!STATE.settings.neuralTTS; saveState(); render()"></div>
+        <div class="settings-row-info"><div class="settings-row-label">Daily target</div><div class="settings-row-desc">Today's session adapts to fit your chosen time.</div></div>
+        <div class="settings-time">${[10,20,30,45,60].map(m => `<button class="${STATE.settings.dailyMinutes===m?'active':''}" onclick="STATE.settings.dailyMinutes=${m}; saveState(); render()">${m}m</button>`).join('')}</div>
       </div>
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">${STATE.skippedOnboard ? 'Placement test' : 'Recalibrate'}</div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Google TTS API key</div>
-          <div class="settings-row-desc">Stored on your device only. Needed for the neural voice; without it, the device voice is used.</div>
-        </div>
-        <input class="settings-select" type="text" value="${(STATE.settings.googleTtsKey||'').replace(/"/g,'&quot;')}" placeholder="Paste key" onchange="STATE.settings.googleTtsKey=this.value.trim(); saveState();" />
+        <div class="settings-row-info"><div class="settings-row-label">${STATE.skippedOnboard ? 'Take the placement test' : 'Recalibrate'}</div><div class="settings-row-desc">${STATE.skippedOnboard ? 'About 8 to 10 minutes. It estimates where to start in the Course and seeds only what you show you know. It never deletes your progress.' : 'Re-run the placement test. Adjusts how easy or hard the app thinks each topic is for you. Your custom vocab, mistakes, streak, and Conversa history are preserved.'}</div></div>
+        <button class="btn btn-ghost btn-sm" onclick="startRecalibration()">${STATE.skippedOnboard ? 'Start test' : 'Recalibrate'}</button>
       </div>
+    </div>`;
+}
+function neuralVoiceList() {
+  if (STATE.loadedNeuralVoices && STATE.loadedNeuralVoices.length) return STATE.loadedNeuralVoices;
+  return NEURAL_TTS_VOICES.map(v => ({ name: v.name, label: v.label }));
+}
+function renderSettingsAudio() {
+  const allVoices = ('speechSynthesis' in window) ? window.speechSynthesis.getVoices() : [];
+  const itVoices = allVoices.filter(v => v.lang.startsWith('it'));
+  const currentRate = STATE.settings.ttsRate || 0.92;
+  const voices = neuralVoiceList();
+  const loaded = STATE.loadedNeuralVoices && STATE.loadedNeuralVoices.length;
+  const prep = STATE._offlinePrep;
+  const prepPct = prep && prep.total ? Math.round(prep.done / prep.total * 100) : 0;
+  main.innerHTML = `
+    ${settingsHeader('Audio &amp; voice')}
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Device voice</div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Neural voice choice</div>
-          <div class="settings-row-desc">it-IT Standard and Neural2 only.</div>
-        </div>
-        <select class="settings-select" onchange="STATE.settings.neuralVoice=this.value; saveState();">
-          ${NEURAL_TTS_VOICES.map(v => `<option value="${v.name}" ${STATE.settings.neuralVoice===v.name?'selected':''}>${v.label}</option>`).join('')}
-        </select>
-      </div>
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Voice</div>
-          <div class="settings-row-desc">${itVoices.length} Italian voice${itVoices.length===1?'':'s'} available on your device. Quality varies by browser and OS.</div>
-        </div>
-        <select class="settings-select" onchange="STATE.settings.ttsVoiceURI = this.value || null; saveState();">
+        <div class="settings-row-info"><div class="settings-row-label">Fallback voice</div><div class="settings-row-desc">${itVoices.length} Italian voice${itVoices.length===1?'':'s'} on this device. Used only when the neural voice is off or unavailable.</div></div>
+        <select class="settings-select" onchange="STATE.settings.ttsVoiceURI=this.value||null; saveState();">
           <option value="">Auto (best available)</option>
           ${itVoices.map(v => `<option value="${v.voiceURI}" ${STATE.settings.ttsVoiceURI===v.voiceURI?'selected':''}>${v.name} (${v.lang})</option>`).join('')}
         </select>
       </div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Playback speed</div>
-          <div class="settings-row-desc">Slower = easier to follow. Try 0.8 if Italian feels fast.</div>
-        </div>
-        <div class="settings-time">
-          ${[{r:0.7,l:'0.7×'},{r:0.85,l:'0.85×'},{r:0.92,l:'normal'},{r:1.0,l:'1.0×'},{r:1.15,l:'1.15×'}].map(o => `<button class="${Math.abs(currentRate-o.r)<0.02?'active':''}" onclick="STATE.settings.ttsRate=${o.r}; saveState(); render()">${o.l}</button>`).join('')}
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Playback speed</div><div class="settings-row-desc">Slower is easier to follow. Try 0.85 if Italian feels fast. Set this before preparing offline so saved clips use it.</div></div>
+        <div class="settings-time">${[{r:0.7,l:'0.7×'},{r:0.85,l:'0.85×'},{r:0.92,l:'normal'},{r:1.0,l:'1.0×'},{r:1.15,l:'1.15×'}].map(o => `<button class="${Math.abs(currentRate-o.r)<0.02?'active':''}" onclick="STATE.settings.ttsRate=${o.r}; saveState(); render()">${o.l}</button>`).join('')}</div>
       </div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Test current voice</div>
-          <div class="settings-row-desc">Plays a sample with your current voice and speed.</div>
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Test current voice</div><div class="settings-row-desc">Plays a sample at your current voice and speed.</div></div>
         <button class="btn btn-ghost btn-sm" onclick="speak('Buongiorno, sono Angela. Benvenuto a casa nostra. Hai fame? Il pranzo è quasi pronto.')">▸ Test</button>
       </div>
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Voice recognition test</div>
-          <div class="settings-row-desc">Try speaking in Italian. Works in Chrome and Safari.</div>
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Neural voice (Google)</div>
+      <p class="settings-row-desc" style="margin:-4px 0 8px;">High quality neural audio for tap-to-listen. Each item is synthesized once, saved on this device, then replayed instantly and offline. Without a key, the device voice is used.</p>
+      <div class="settings-row" style="display:block;">
+        <div class="settings-row-label" style="margin-bottom:6px;">Google Text-to-Speech key</div>
+        <div class="key-field">
+          <input id="tts-key-input" class="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${(STATE.settings.googleTtsKey||'').replace(/"/g,'&quot;')}" placeholder="Paste your Google TTS key" oninput="onTtsKeyInput(this.value)" onchange="commitTtsKey()" />
+          <span id="tts-key-status" class="key-status ${(STATE.settings.googleTtsKey||'').trim()?'ok':''}">${(STATE.settings.googleTtsKey||'').trim() ? '✓ saved' : ''}</span>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="startVoiceRecognition(t => uiAlert('You said: '+t))">🎤 Test mic</button>
+        <div class="settings-row-desc">Saved on this device and synced to your other devices, so you enter it once.</div>
       </div>
-      </div>
-    </details>
-    <details class="settings-group" ${sgOpen('conversa')} ontoggle="STATE.settingsGroupsOpen.conversa=this.open">
-      <summary class="settings-group-head"><span class="settings-group-title">Conversa AI</span></summary>
-      <div class="settings-group-body">
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Anthropic API key ${apiKeySet ? '<span style="color:var(--leaf); font-size:12px; margin-left:6px;">✓ active</span>' : ''}</div>
-          <div class="settings-row-desc">Optional. Unlocks dynamic roleplay with Claude. Key stored only on your device. Get one at console.anthropic.com (Haiku 4.5 costs roughly $0.001 per conversation turn).</div>
-        </div>
-        <button class="btn btn-ghost btn-sm" onclick="openApiKeyModal()">${apiKeySet ? 'Update key' : 'Add key'}</button>
+        <div class="settings-row-info"><div class="settings-row-label">Voice</div><div class="settings-row-desc">${loaded ? (STATE.loadedNeuralVoices.length + ' voices loaded from your Google key, with the genders Google reports.') : 'Showing a built-in list. Tap Load voices for the full set with accurate genders.'}</div></div>
+        <select class="settings-select" onchange="STATE.settings.neuralVoice=this.value; saveState();">
+          ${voices.map(v => `<option value="${v.name}" ${STATE.settings.neuralVoice===v.name?'selected':''}>${v.label}</option>`).join('')}
+        </select>
       </div>
-      </div>
-    </details>
-    <details class="settings-group" ${sgOpen('backup')} ontoggle="STATE.settingsGroupsOpen.backup=this.open">
-      <summary class="settings-group-head"><span class="settings-group-title">Backup and restore</span></summary>
-      <div class="settings-group-body">
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Save to Google Drive</div>
-          <div class="settings-row-desc">Saves a dated backup directly to your <strong>back-ups</strong> folder in Google Drive. Requires your Claude API key. ${STATE.lastDriveBackup ? 'Last Drive backup: ' + new Date(STATE.lastDriveBackup).toLocaleString() + '.' : 'No Drive backup yet today.'}</div>
+        <div class="settings-row-info"><div class="settings-row-label">More voices</div><div class="settings-row-desc">Load every Italian voice available on your Google key, including newer Neural2 and Chirp voices.</div></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;"><button id="load-voices-btn" class="btn btn-ghost btn-sm" onclick="loadNeuralVoices(true)">Load voices</button><button class="btn btn-ghost btn-sm" onclick="testNeuralVoice()">▸ Test neural</button></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info"><div class="settings-row-label">Use neural voice</div><div class="settings-row-desc">When on, tap-to-listen uses the neural voice and caches each clip for offline.</div></div>
+        <div class="toggle ${STATE.settings.neuralTTS?'on':''}" onclick="STATE.settings.neuralTTS=!STATE.settings.neuralTTS; saveState(); render()"></div>
+      </div>
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Save for offline</div>
+      <div class="settings-row" style="display:block;">
+        <div class="settings-row-desc" style="margin-bottom:6px;">One-time download of the whole app's audio in the current voice, so tap-to-listen works fully offline anywhere. You can keep using the app while it runs. Safe to stop and resume; clips already saved are skipped.</div>
+        ${prep ? `<div class="prep-bar"><div class="prep-bar-fill" id="prep-fill" style="width:${prepPct}%;"></div></div>
+        <div class="settings-row-desc" id="prep-text">${prep.running ? ('Preparing ' + prep.done + ' of ' + prep.total + ' (' + prepPct + '%)') : ('Done. ' + prep.ok + ' clips ready' + (prep.fail ? (', ' + prep.fail + ' skipped') : '') + '.')}</div>` : ''}
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          ${prep && prep.running
+            ? `<button class="btn btn-ghost btn-sm" onclick="stopOfflinePrep()">Stop</button>`
+            : `<button class="btn btn-primary btn-sm" onclick="prepareOfflineAudio()">Prepare everything for offline</button>`}
         </div>
+        <div class="settings-row-desc" style="margin-top:10px;">On this device: <strong id="cached-count">…</strong> clips saved.</div>
+      </div>
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Microphone</div>
+      <div class="settings-row">
+        <div class="settings-row-info"><div class="settings-row-label">Voice recognition test</div><div class="settings-row-desc">Try speaking in Italian. Works in Chrome and Safari. Typing is always the fallback.</div></div>
+        <button class="btn btn-ghost btn-sm" onclick="startVoiceRecognition(t => uiAlert('You said: ' + t))">🎤 Test mic</button>
+      </div>
+    </div>`;
+  refreshCachedCount();
+}
+function renderSettingsAccount() {
+  const apiKeySet = !!STATE.claudeApiKey;
+  main.innerHTML = `
+    ${settingsHeader('Account &amp; data')}
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Conversa AI key</div>
+      <div class="settings-row" style="display:block;">
+        <div class="settings-row-label" style="margin-bottom:6px;">Anthropic API key ${apiKeySet ? '<span class="key-status ok" style="margin-left:6px;">✓ active</span>' : ''}</div>
+        <div class="key-field">
+          <input id="claude-key-input" class="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${(STATE.claudeApiKey||'').replace(/"/g,'&quot;')}" placeholder="sk-ant-..." oninput="onClaudeKeyInput(this.value)" onchange="commitClaudeKey()" />
+          <span id="claude-key-status" class="key-status ${apiKeySet?'ok':''}">${apiKeySet ? '✓ active' : ''}</span>
+        </div>
+        <div class="settings-row-desc">Your own Anthropic key powers live Conversa chat and writing feedback. It saves as you type, stays on this device, and syncs to your other devices. Get one at console.anthropic.com.</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="commitClaudeKey()">Save key</button>
+      </div>
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Sync</div>
+      <div class="settings-row">
+        <div class="settings-row-info"><div class="settings-row-label">Cloud sync</div><div class="settings-row-desc">Pre-connected to your private Supabase project. Nothing to enter. ${STATE.lastSyncAt ? 'Last saved on this device: ' + new Date(STATE.lastSyncAt).toLocaleString() + '.' : 'Synced across your devices.'}</div></div>
+        <button class="btn btn-ghost btn-sm" onclick="pullFromCloud()">Pull latest</button>
+      </div>
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Backup</div>
+      <div class="settings-row">
+        <div class="settings-row-info"><div class="settings-row-label">Save to Google Drive</div><div class="settings-row-desc">Saves a dated backup to your back-ups folder in Drive. Requires your Anthropic key. ${STATE.lastDriveBackup ? 'Last Drive backup: ' + new Date(STATE.lastDriveBackup).toLocaleString() + '.' : 'No Drive backup yet today.'}</div></div>
         <button class="btn btn-primary btn-sm" id="drive-backup-btn" onclick="saveToDrive()">Save to Drive</button>
       </div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Export backup</div>
-          <div class="settings-row-desc">Includes: your progress through every lesson, all learned vocabulary and fragility scores, your streak, custom words, writing drafts, chat history, and API key. Save this file to iCloud, Dropbox, or any safe location.</div>
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Download backup</div><div class="settings-row-desc">A snapshot file with your progress, vocabulary, streak, custom words, drafts, chat, and saved API key. Restore any time.</div></div>
         <button class="btn btn-ghost btn-sm" onclick="exportBackup()">Download</button>
       </div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Restore from backup</div>
-          <div class="settings-row-desc">Restores: lesson progress, learned vocabulary and fragility scores, streak, custom words, writing drafts, chat history, and API key.</div>
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Restore from backup</div><div class="settings-row-desc">Replaces everything on this device with the contents of a backup file, including the saved API key.</div></div>
         <button class="btn btn-ghost btn-sm" onclick="importBackup()">Choose file</button>
       </div>
-      ${STATE.lastSyncAt ? `<div style="font-size:11px; color:var(--ink-3); padding:0 18px 14px;">Last saved on this device: ${new Date(STATE.lastSyncAt).toLocaleString()}</div>` : ''}
-      </div>
-    </details>
-    <details class="settings-group" ${sgOpen('calibration')} ontoggle="STATE.settingsGroupsOpen.calibration=this.open">
-      <summary class="settings-group-head"><span class="settings-group-title">Calibration and diagnostics</span></summary>
-      <div class="settings-group-body">
+    </div>
+    <div class="settings-section" style="max-width:760px;">
+      <div class="settings-section-title">Diagnostics and reset</div>
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">${STATE.skippedOnboard ? 'Take the placement test' : 'Recalibrate'}</div>
-          <div class="settings-row-desc">${STATE.skippedOnboard ? 'You skipped this earlier. Take it now (8-10 min) and the app will know which words to drill and which to skip.' : 'Re-run the placement test. Adjusts how easy or hard the app thinks each topic is for you. Your custom vocab, mistakes, streak, and Conversa history are preserved.'}</div>
-        </div>
-        <button class="btn btn-ghost btn-sm" onclick="startRecalibration()">${STATE.skippedOnboard ? 'Start test' : 'Recalibrate'}</button>
-      </div>
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Show last script errors</div>
-          <div class="settings-row-desc">If something feels broken or you see a "Script error" message, tap this to see what went wrong. Useful for reporting bugs.</div>
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Show last script errors</div><div class="settings-row-desc">If something feels broken, tap this to see what went wrong. Useful for reporting bugs.</div></div>
         <button class="btn btn-ghost btn-sm" onclick="showLastErrors()">Show errors</button>
       </div>
-      </div>
-    </details>
-    <details class="settings-group" ${sgOpen('danger')} ontoggle="STATE.settingsGroupsOpen.danger=this.open">
-      <summary class="settings-group-head"><span class="settings-group-title">Reset</span></summary>
-      <div class="settings-group-body">
       <div class="settings-row">
-        <div class="settings-row-info">
-          <div class="settings-row-label">Reset all progress</div>
-          <div class="settings-row-desc">Clear all data and start over. Cannot be undone.</div>
-        </div>
+        <div class="settings-row-info"><div class="settings-row-label">Reset all progress</div><div class="settings-row-desc">Clears mastery, course progress and streak. Cannot be undone.</div></div>
         <button class="btn btn-ghost btn-sm" onclick="uiConfirm('Reset all progress? Cannot be undone.').then(ok=>{if(ok){STATE.vocab={}; VOCAB.forEach(v=>STATE.vocab[v.id]={fragility:0.8,attempts:0,correct:0,lastSeen:null,skipped:0}); STATE.grammar={}; STATE.course={}; STATE.stories={}; STATE.streak=0; STATE.chat=[]; STATE.mistakes=[]; STATE.onboarded=false; onboardStep=-1; onboardAnswers={}; saveState(); navHome('dashboard');}})">Reset</button>
       </div>
-      </div>
-    </details>`;
+    </div>`;
 }
-
+async function loadNeuralVoices(manual) {
+  const key = (STATE.settings.googleTtsKey || '').trim();
+  if (!key) { if (manual) await uiAlert('Add your Google TTS key first, then load the voices.'); return; }
+  const btn = document.getElementById('load-voices-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+  try {
+    const res = await fetch('https://texttospeech.googleapis.com/v1/voices?languageCode=it-IT&key=' + encodeURIComponent(key));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const order = ['Neural2', 'Chirp3 HD', 'Studio', 'WaveNet', 'News', 'Polyglot', 'Standard', 'Other'];
+    const list = (data.voices || [])
+      .filter(v => (v.languageCodes || []).some(c => String(c).toLowerCase().indexOf('it-it') === 0))
+      .map(v => {
+        const g = String(v.ssmlGender || '').toLowerCase();
+        const gender = g === 'female' ? 'female' : g === 'male' ? 'male' : 'neutral';
+        const n = v.name || '';
+        const type = /Neural2/.test(n) ? 'Neural2' : /Wavenet/i.test(n) ? 'WaveNet' : /Standard/.test(n) ? 'Standard' : /Chirp3/i.test(n) ? 'Chirp3 HD' : /Polyglot/i.test(n) ? 'Polyglot' : /News/i.test(n) ? 'News' : /Studio/i.test(n) ? 'Studio' : 'Other';
+        const tail = n.replace('it-IT-', '').split('-').pop();
+        return { name: n, label: type + ' · ' + tail + ' · ' + gender, gender: gender, type: type };
+      })
+      .sort((a, b) => { const d = order.indexOf(a.type) - order.indexOf(b.type); return d !== 0 ? d : a.name.localeCompare(b.name); });
+    if (!list.length) throw new Error('no Italian voices returned');
+    STATE.loadedNeuralVoices = list;
+    if (manual) await uiAlert('Loaded ' + list.length + ' Italian voices from your Google key.');
+    if (STATE.view === 'settings') render();
+  } catch (e) {
+    if (manual) await uiAlert('Could not load voices. Check the key and your connection, then try again.');
+  } finally {
+    const b2 = document.getElementById('load-voices-btn');
+    if (b2) { b2.disabled = false; b2.textContent = 'Load voices'; }
+  }
+}
+async function testNeuralVoice() {
+  const key = (STATE.settings.googleTtsKey || '').trim();
+  if (!key) { await uiAlert('Add your Google TTS key first.'); return; }
+  const voice = STATE.settings.neuralVoice || 'it-IT-Neural2-A';
+  const rate = STATE.settings.ttsRate || 0.92;
+  const blob = await neuralGetClip('Buongiorno, sono Angela. Benvenuto a casa nostra.', voice, rate);
+  if (!blob) { await uiAlert('Could not play the neural voice. Check the key, the chosen voice, and your connection.'); return; }
+  try { const a = new Audio(URL.createObjectURL(blob)); a.play().catch(() => {}); } catch (e) {}
+}
+function onTtsKeyInput(v) {
+  STATE.settings.googleTtsKey = (v || '').trim();
+  const s = document.getElementById('tts-key-status');
+  if (s) { if (STATE.settings.googleTtsKey) { s.textContent = '✓ saved'; s.className = 'key-status ok'; } else { s.textContent = ''; s.className = 'key-status'; } }
+}
+function commitTtsKey() {
+  const el = document.getElementById('tts-key-input'); if (!el) return;
+  onTtsKeyInput(el.value); saveState();
+  const s = document.getElementById('tts-key-status');
+  if (STATE.settings.googleTtsKey && s) { s.textContent = '✓ saved and synced'; s.className = 'key-status ok'; }
+}
+function onClaudeKeyInput(v) {
+  const clean = sanitizeApiKey(v);
+  const s = document.getElementById('claude-key-status');
+  if (clean === '') {
+    delete STATE.claudeApiKey;
+    try { localStorage.removeItem('famiglia_api_key'); } catch (e) {}
+    if (s) { s.textContent = ''; s.className = 'key-status'; }
+  } else if (clean.startsWith('sk-ant-')) {
+    STATE.claudeApiKey = clean;
+    try { localStorage.setItem('famiglia_api_key', clean); } catch (e) {}
+    if (s) { s.textContent = '✓ active'; s.className = 'key-status ok'; }
+  } else {
+    if (s) { s.textContent = 'keys start with sk-ant-'; s.className = 'key-status warn'; }
+  }
+}
+function commitClaudeKey() {
+  const el = document.getElementById('claude-key-input'); if (!el) return;
+  onClaudeKeyInput(el.value); saveState();
+  const s = document.getElementById('claude-key-status');
+  if (STATE.claudeApiKey && s) { s.textContent = '✓ saved and synced'; s.className = 'key-status ok'; }
+}
+async function pullFromCloud() {
+  try {
+    const remote = await supabaseLoad();
+    const payload = remote && (remote.payload || remote.data || remote);
+    if (payload && typeof payload === 'object' && (payload.vocab || payload.course || payload.settings)) {
+      Object.assign(STATE, payload);
+      try { hydrateCustomVocab(); hydrateVocabOverrides(); hydrateCustomVerbs(); hydrateVerbOverrides(); } catch (e) {}
+      await uiAlert('Pulled the latest from the cloud.');
+      navHome('dashboard');
+    } else {
+      await uiAlert('No cloud data found yet. This device will be the first to sync.');
+    }
+  } catch (e) {
+    await uiAlert('Could not reach the cloud right now. Try again in a moment.');
+  }
+}
+async function countCachedClips() {
+  try {
+    const db = await ttsDBOpen(); if (!db) return 0;
+    return await new Promise(res => {
+      try { const r = db.transaction('clips', 'readonly').objectStore('clips').count(); r.onsuccess = () => res(r.result || 0); r.onerror = () => res(0); }
+      catch (e) { res(0); }
+    });
+  } catch (e) { return 0; }
+}
+async function refreshCachedCount() {
+  const el = document.getElementById('cached-count'); if (!el) return;
+  const n = await countCachedClips();
+  if (el) el.textContent = n;
+}
+function collectSpeakableItalian() {
+  const phrases = new Set();
+  try { (typeof VOCAB !== 'undefined' ? VOCAB : []).forEach(v => { if (v && v.it) phrases.add(v.it); if (v && v.ex && v.ex.it) phrases.add(v.ex.it); }); } catch (e) {}
+  try { (typeof STORIES !== 'undefined' ? STORIES : []).forEach(s => { (s.body || []).forEach(seg => { if (seg && seg.it) phrases.add(seg.it); }); }); } catch (e) {}
+  const chunks = new Set();
+  phrases.forEach(t => { (t.match(/[^.!?]+[.!?]*/g) || [t]).forEach(s => { const x = s.trim(); if (x && x.length <= 350) chunks.add(x); }); });
+  return Array.from(chunks);
+}
+async function prepareOfflineAudio() {
+  if (!neuralTTSEnabled()) { await uiAlert('Turn on the neural voice and add your Google TTS key first.'); return; }
+  if (STATE._offlinePrep && STATE._offlinePrep.running) return;
+  const voice = STATE.settings.neuralVoice || 'it-IT-Neural2-A';
+  const rate = STATE.settings.ttsRate || 0.92;
+  const items = collectSpeakableItalian();
+  STATE._offlinePrep = { total: items.length, done: 0, ok: 0, fail: 0, running: true, voice: voice };
+  if (STATE.view === 'settings' && STATE.settingsPage === 'audio') render();
+  for (let i = 0; i < items.length; i++) {
+    if (!STATE._offlinePrep || !STATE._offlinePrep.running) break;
+    try { const blob = await neuralGetClip(items[i], voice, rate); if (blob) STATE._offlinePrep.ok++; else STATE._offlinePrep.fail++; }
+    catch (e) { STATE._offlinePrep.fail++; }
+    STATE._offlinePrep.done = i + 1;
+    if (i % 4 === 0) updateOfflinePrepUI();
+  }
+  if (STATE._offlinePrep) STATE._offlinePrep.running = false;
+  if (STATE.view === 'settings' && STATE.settingsPage === 'audio') render();
+}
+function stopOfflinePrep() { if (STATE._offlinePrep) STATE._offlinePrep.running = false; }
+function updateOfflinePrepUI() {
+  const p = STATE._offlinePrep; if (!p) return;
+  const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+  const fill = document.getElementById('prep-fill'); if (fill) fill.style.width = pct + '%';
+  const txt = document.getElementById('prep-text'); if (txt) txt.textContent = p.running ? ('Preparing ' + p.done + ' of ' + p.total + ' (' + pct + '%)') : ('Done. ' + p.ok + ' clips ready.');
+  const cc = document.getElementById('cached-count'); if (cc) refreshCachedCount();
+}
 function startRecalibration() {
   uiConfirm('Run the placement test now? It takes about 8-10 minutes. Your custom vocab, mistakes, streak, and chat history are NOT touched. Only level-based fragility and grammar confidence get re-set from your new answers.').then(ok => {
     if (!ok) return;
