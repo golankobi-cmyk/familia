@@ -1,0 +1,22 @@
+# Keeps this app's Supabase project awake by touching the database every 3 days.
+# Place in the GitHub repo at:  .github/workflows/keepalive.yml
+# Runs automatically on a schedule. No server needed. Free.
+# Reads the project URL and the publishable key from this repo's GitHub Secrets
+# (named SUPABASE_URL and SUPABASE_KEY), so no secret values live in this file.
+name: keep-supabase-awake
+
+on:
+  schedule:
+    # 08:00 UTC every 3rd day (comfortably under Supabase's 7-day inactivity limit)
+    - cron: '0 8 */3 * *'
+  workflow_dispatch:   # also lets you run it by hand from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Touch the Supabase database
+        run: |
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/progress?select=*&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_KEY }}"
