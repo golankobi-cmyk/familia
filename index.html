@@ -1396,6 +1396,8 @@ body {
 .book-vocab-audio:hover, .book-para-audio:hover { background: var(--accent); color: #fff; }
 .book-text { max-width: 65ch; margin: 8px auto 0; }
 .book-para { font-size: 16px; line-height: 1.8; color: var(--ink); margin: 0 0 16px; }
+.dlg-line { display: block; margin: 0 0 6px; }
+.dlg-line:last-child { margin-bottom: 0; }
 .book-para-audio { margin-right: 8px; vertical-align: middle; }
 .book-quiz { max-width: 65ch; margin: 26px auto 0; padding-top: 20px; border-top: 1px solid var(--line); }
 .book-quiz-head { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; }
@@ -8163,6 +8165,26 @@ function editCustomVocab(vid) { return editVocab(vid); }
 // ============================================================
 // === CUSTOM VERB MODAL: add-verb-on-the-fly ===
 // ============================================================
+// Italian orthographic gluing for regular -ARE stems. Without this, stem+ending
+// produces wrong spellings: mangiare -> "mangii"/"mangiiamo" (correct: mangi/
+// mangiamo), cercare -> "cerci" (correct: cerchi), pagare -> "pagi" (correct:
+// paghi). Only -are needs this; -ere/-ire concatenate cleanly.
+function _areGlue(stem, ending) {
+  if (!ending) return stem;
+  if (!/^[ie]/.test(ending)) return stem + ending;       // ending starts a/o/u: plain join
+  if (/[cg]$/.test(stem)) return stem + 'h' + ending;      // -care/-gare: keep the hard sound
+  if (/i$/.test(stem)) return stem.slice(0, -1) + ending;  // -ciare/-giare/-iare: drop the softening i
+  return stem + ending;
+}
+// Future/conditional stem for -are verbs is built from the infinitive, NOT via the
+// presente softening rule. Plain -iare verbs KEEP the i (studiare -> studierò,
+// cambiare -> cambierò, tagliare -> taglierò); only -ciare/-giare drop the softening
+// i (mangiare -> mangerò); -care/-gare insert h (cercare -> cercherò).
+function _areFutStem(stem) {
+  if (/[cg]$/.test(stem)) return stem + 'h';         // -care/-gare
+  if (/[cg]i$/.test(stem)) return stem.slice(0, -1);  // -ciare/-giare drop softening i
+  return stem;                                        // plain -iare keeps i; normal -are
+}
 function regularConjugate(infinitive, group, aux) {
   const inf = (infinitive || '').toLowerCase().trim();
   if (!inf) return null;
@@ -8178,11 +8200,13 @@ function regularConjugate(infinitive, group, aux) {
   const ppPlural = auxIsAvere ? pastPart : pastPart.slice(0,-1) + 'i/e';
   let presente, imperfetto, futuro, condizionale, imperativo;
   if (group === '-are') {
-    presente = { io: stem+'o', tu: stem+'i', lui: stem+'a', noi: stem+'iamo', voi: stem+'ate', loro: stem+'ano' };
-    imperfetto = { io: stem+'avo', tu: stem+'avi', lui: stem+'ava', noi: stem+'avamo', voi: stem+'avate', loro: stem+'avano' };
-    futuro = { io: stem+'erò', tu: stem+'erai', lui: stem+'erà', noi: stem+'eremo', voi: stem+'erete', loro: stem+'eranno' };
-    condizionale = { io: stem+'erei', tu: stem+'eresti', lui: stem+'erebbe', noi: stem+'eremmo', voi: stem+'ereste', loro: stem+'erebbero' };
-    imperativo = { tu: stem+'a', lei: stem+'i', noi: stem+'iamo', voi: stem+'ate' };
+    const J = (e) => _areGlue(stem, e);
+    const fstem = _areFutStem(stem);
+    presente = { io: J('o'), tu: J('i'), lui: J('a'), noi: J('iamo'), voi: J('ate'), loro: J('ano') };
+    imperfetto = { io: J('avo'), tu: J('avi'), lui: J('ava'), noi: J('avamo'), voi: J('avate'), loro: J('avano') };
+    futuro = { io: fstem+'erò', tu: fstem+'erai', lui: fstem+'erà', noi: fstem+'eremo', voi: fstem+'erete', loro: fstem+'eranno' };
+    condizionale = { io: fstem+'erei', tu: fstem+'eresti', lui: fstem+'erebbe', noi: fstem+'eremmo', voi: fstem+'ereste', loro: fstem+'erebbero' };
+    imperativo = { tu: J('a'), lei: J('i'), noi: J('iamo'), voi: J('ate') };
   } else if (group === '-ere') {
     presente = { io: stem+'o', tu: stem+'i', lui: stem+'e', noi: stem+'iamo', voi: stem+'ete', loro: stem+'ono' };
     imperfetto = { io: stem+'evo', tu: stem+'evi', lui: stem+'eva', noi: stem+'evamo', voi: stem+'evate', loro: stem+'evano' };
@@ -8966,6 +8990,75 @@ const NEURAL_TTS_VOICES = [
 function neuralTTSEnabled() {
   return !!(STATE.settings && STATE.settings.neuralTTS && (STATE.settings.googleTtsKey || '').trim());
 }
+// Conversa speaker gender, used to pick a matching TTS voice so a male character
+// is not read in a female voice. Named characters are unambiguous; situational
+// scenarios with no fixed speaker are pinned to one gender purely for voice
+// consistency within that roleplay.
+const CONVERSA_GENDER = {
+  sc_maria_arrival: 'female', sc_antonio_garden: 'male', sc_giulia_walk: 'female',
+  sc_doctor: 'male', sc_barista: 'male', sc_zia_cucina: 'female', sc_mercato: 'male',
+  sc_telefono: 'female', sc_vicina: 'female', sc_cugini_spiaggia: 'female',
+  sc_cena_brindisi: 'male', sc_bisnonna: 'female', sc_vincenzo_giornata: 'male',
+  sc_ospite_casa: 'female', sc_hotel_reception: 'female', sc_ristorante_cena: 'male',
+  sc_negozio_casa: 'female', sc_collega_ufficio: 'male', sc_nuova_conoscenza: 'female',
+  sc_opinioni_film: 'male', sc_fare_progetti: 'female', sc_farmacia: 'female',
+  sc_telefono_servizio: 'female', sc_indicazioni: 'male', sc_desideri_futuro: 'female',
+  sc_reclamo: 'male', sc_banca: 'male', sc_tecnico: 'male', sc_palestra: 'female',
+  sc_hobby: 'male', sc_dibattito: 'male', sc_visita_medica: 'male',
+  sc_invito_amici: 'female', sc_vincenzo_casa: 'male'
+};
+// Determine the gender of a neural voice name from the catalogue labels.
+function voiceGenderOf(name) {
+  const v = NEURAL_TTS_VOICES.find(x => x.name === name);
+  if (!v) return null;
+  if (/female/i.test(v.label)) return 'female';
+  if (/male/i.test(v.label)) return 'male';
+  return null;
+}
+// Map a requested gender onto a voice. If the user's chosen voice already matches
+// the requested gender, keep it exactly (the chosen voice stays the default). Only
+// when the gender differs do we swap to the same-family voice of the other gender.
+function genderedNeuralVoice(gender) {
+  const base = STATE.settings.neuralVoice || 'it-IT-Neural2-A';
+  if (voiceGenderOf(base) === gender) return base;
+  const fam = base.includes('Neural2') ? 'Neural2' : base.includes('Wavenet') ? 'Wavenet' : 'Standard';
+  const map = {
+    Neural2: { female: 'it-IT-Neural2-A', male: 'it-IT-Neural2-C' },
+    Wavenet: { female: 'it-IT-Wavenet-A', male: 'it-IT-Wavenet-B' },
+    Standard: { female: 'it-IT-Standard-A', male: 'it-IT-Standard-B' }
+  };
+  return (map[fam] && map[fam][gender]) || base;
+}
+// Build the speak() options for a Conversa scenario: the gendered neural voice
+// name plus a gender hint for the web-speech fallback.
+function conversaVoiceOpts(scenarioId, extra) {
+  const g = CONVERSA_GENDER[scenarioId];
+  const o = Object.assign({}, extra || {});
+  if (g) { o.voice = genderedNeuralVoice(g); o.voiceGender = g; }
+  return o;
+}
+// The learner (Kobi) is male, so his own lines and answer options are always read
+// in a male voice, regardless of the general voice chosen in Settings.
+function myVoiceOpts(extra) {
+  const o = Object.assign({}, extra || {});
+  o.voice = genderedNeuralVoice('male');
+  o.voiceGender = 'male';
+  return o;
+}
+// "Madonna" as an exclamation reads as blasphemy to Orthodox Sicilians. Replace it
+// with a neutral interjection wherever it appears as a standalone exclamation,
+// while leaving genuine references (e.g. a place or artwork name) untouched as far
+// as is practical. Applied to all AI-generated Italian before it is shown/spoken.
+function sanitizeExclamations(text) {
+  if (!text) return text;
+  let t = text;
+  // "Madonna mia" / "Madonna santa" exclamations -> "Mamma mia"
+  t = t.replace(/\bMadonna\s+mia\b/gi, 'Mamma mia');
+  t = t.replace(/\bMadonna\s+santa\b/gi, 'Mamma mia');
+  // Bare exclamatory "Madonna" followed by ! or , or end -> "Mamma mia"
+  t = t.replace(/\bMadonna\b(?=\s*[!,.]|$)/g, 'Mamma mia');
+  return t;
+}
 let _ttsDB = null;
 function ttsDBOpen() {
   return new Promise((resolve) => {
@@ -9025,7 +9118,7 @@ async function neuralSpeak(text, opts) {
   _neuralStop = false;
   try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {}
   const rate = (opts && opts.rate) || STATE.settings.ttsRate || 0.92;
-  const voice = STATE.settings.neuralVoice || 'it-IT-Neural2-A';
+  const voice = (opts && opts.voice) || STATE.settings.neuralVoice || 'it-IT-Neural2-A';
   const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
   const chunks = sentences.map((s) => s.trim()).filter(Boolean);
   for (let i = 0; i < chunks.length; i++) {
@@ -9099,7 +9192,17 @@ function playNextTts(opts) {
   // Prefer saved voice; otherwise pick the best Italian voice available
   const voices = window.speechSynthesis.getVoices();
   let chosen = null;
-  if (STATE.settings.ttsVoiceURI) {
+  // A per-utterance gender hint (used by Conversa for male/female speakers) takes
+  // priority over the saved default so a male character is not read in a female
+  // voice. Browser voice gender is not exposed, so we match on known name lists.
+  if (opts && opts.voiceGender) {
+    const itVoices = voices.filter(v => v.lang.startsWith('it'));
+    const maleNames = /paolo|luca|diego|cosimo|giuseppe|male/i;
+    const femaleNames = /alice|federica|elsa|chiara|giulia|female/i;
+    if (opts.voiceGender === 'male') chosen = itVoices.find(v => maleNames.test(v.name));
+    else if (opts.voiceGender === 'female') chosen = itVoices.find(v => femaleNames.test(v.name));
+  }
+  if (!chosen && STATE.settings.ttsVoiceURI) {
     chosen = voices.find(v => v.voiceURI === STATE.settings.ttsVoiceURI);
   }
   if (!chosen) {
@@ -9278,11 +9381,15 @@ function render() {
   const v = STATE.view;
   if (v === 'dashboard') return renderDashboard();
   if (v === 'today') return renderToday();
+  if (v === 'todayTeachVocab') return renderTodayTeachVocab();
+  if (v === 'todayTeachVerbs') return renderTodayTeachVerbs();
+  if (v === 'todayTeachGrammar') return renderTodayTeachGrammar();
   if (v === 'course') return renderCourse();
   if (v === 'lesson') return renderLesson();
   if (v === 'grammar') return renderGrammar();
   if (v === 'vocab') return renderVocab();
   if (v === 'verbs') return renderVerbs();
+  if (v === 'verb-topic') return renderVerbTopic();
   if (v === 'vocab-theme') return renderVocabTheme();
   if (v === 'stories') return renderStoriesList();
   if (v === 'story') return renderStoryReader();
@@ -9639,25 +9746,23 @@ function buildTodaySession(minutes) {
   const s = [];
   const now = Date.now();
   const day = 24 * 60 * 60 * 1000;
-  // Smart weak-word pool: combines fragility + recency of mistakes
+  // Smart weak-word pool: combines fragility + recency of mistakes. Drawn ONLY
+  // from words the learner has actually encountered (STATE.vocab is the progress
+  // record), so the warm-up is always grounded in real data, never random.
   const recentMistakes = (STATE.mistakes || []).filter(m => (now - m.when) <= 14 * day);
   const mistakeCounts = {};
   recentMistakes.forEach(m => { if (m.vocabId) mistakeCounts[m.vocabId] = (mistakeCounts[m.vocabId] || 0) + 1; });
-  // Score each touched vocab: fragility weight + recent-mistake boost + spacing factor
   const candidates = Object.entries(STATE.vocab)
     .filter(([_, v]) => v.attempts > 0 || v.fragility !== 0.8)
     .map(([id, v]) => {
       const fragScore = v.fragility;
       const mistakeScore = (mistakeCounts[id] || 0) * 0.15;
       const daysSince = v.lastSeen ? (now - v.lastSeen) / day : 30;
-      const spacingBonus = Math.min(daysSince / 7, 1) * 0.15; // up to +0.15 for ~7+ day gap
+      const spacingBonus = Math.min(daysSince / 7, 1) * 0.15;
       return { id, total: fragScore + mistakeScore + spacingBonus };
     })
     .sort((a, b) => b.total - a.total);
   const weakIds = candidates.slice(0, 8).map(c => c.id);
-  // SRS: words past their computed due date are due for refresh. Genuinely weak
-  // words (fragility >= 0.6) are handled by the weak pool instead. Legacy items
-  // with no stored due date fall back to the old 5-21 day window.
   const dueIds = Object.entries(STATE.vocab)
     .filter(([_, v]) => v.attempts > 0 && v.fragility < 0.6)
     .filter(([_, v]) => {
@@ -9674,47 +9779,76 @@ function buildTodaySession(minutes) {
     .slice(0, 6)
     .map(([id]) => id);
 
-  // 1. Weak review (always first if exists)
-  if (weakIds.length > 0) {
-    s.push({ id: 'review_weak', kind: 'practice', refId: 'weak_review', icon: 'R', title: 'Warm-up: weak words', sub: `${weakIds.length} fragile word${weakIds.length===1?'':'s'} you've stumbled on`, mins: 5 });
+  // ---- The day's teaching pools, all grounded in progress + the course path ----
+  const cap = progressLevelCap();
+  // Current chapter content (the natural learning frontier).
+  const chapVocabIds = [];
+  let chapGrammarId = null;
+  if (current && current.chapter) {
+    current.chapter.lessons.forEach(l => {
+      if (l.type === 'vocab' && Array.isArray(l.vocabIds)) chapVocabIds.push(...l.vocabIds);
+      if (l.type === 'grammar' && l.grammarId && !chapGrammarId) chapGrammarId = l.grammarId;
+    });
   }
-  // 2. Course progress
-  if (current) {
-    const icons = { vocab: 'V', grammar: 'G', story: 'S', practice: 'P', checkpoint: 'C', dialogue: 'D' };
-    s.push({ id: `course_${current.lesson.id}`, kind: 'lesson', refId: current.lesson.id, chapterId: current.chapter.id, icon: icons[current.lesson.type] || 'L', title: current.lesson.title, sub: `${current.chapter.italian} · ${current.lesson.type}`, mins: current.lesson.mins });
+  // helper: is a vocab id a real, in-scope word
+  const realInScope = (id) => { const v = VOCAB.find(x => x.id === id); return v && isAtOrBelowLevel(v.level, cap); };
+  // Words from the current chapter not yet mastered (fragility >= 0.3 or untouched).
+  const chapToLearn = chapVocabIds.filter(id => realInScope(id)).filter(id => {
+    const sv = STATE.vocab[id];
+    return !sv || sv.fragility >= 0.3;
+  });
+  // Vocab of the day: chapter words to learn first, then weak words, then due words.
+  // All come from the course path or the progress record.
+  let dayVocabIds = [...new Set([...chapToLearn, ...weakIds, ...dueIds])].filter(realInScope).slice(0, 6);
+  if (dayVocabIds.length < 4) {
+    // Top up from any encountered words, weakest first (still progress-grounded).
+    const extra = candidates.map(c => c.id).filter(id => !dayVocabIds.includes(id) && realInScope(id));
+    dayVocabIds = [...dayVocabIds, ...extra].slice(0, 6);
   }
-  // 3. SRS refresh (if we have due items and time)
-  if (dueIds.length >= 4 && minutes >= 20) {
-    s.push({ id: 'srs_refresh', kind: 'practice', refId: 'srs_due', icon: 'S', title: 'Spaced refresh', sub: `${dueIds.length} word${dueIds.length===1?'':'s'} due for review`, mins: 4 });
+  // Verbs of the day: weak/encountered verbs first (progress), plus current-chapter
+  // verbs, restricted to verbs that have a conjugation table to teach.
+  const isConjVerb = (id) => { const v = VOCAB.find(x => x.id === id); return v && v.pos === 'verb' && CONJUGATIONS[v.it]; };
+  const verbToInf = (id) => { const v = VOCAB.find(x => x.id === id); return v ? v.it : null; };
+  const chapVerbInfs = chapVocabIds.filter(isConjVerb).map(verbToInf);
+  const weakVerbInfs = candidates.map(c => c.id).filter(isConjVerb).map(verbToInf);
+  let dayVerbKeys = [...new Set([...chapVerbInfs, ...weakVerbInfs])].filter(Boolean).slice(0, 2);
+  if (dayVerbKeys.length === 0) dayVerbKeys = ['essere', 'avere'].filter(k => CONJUGATIONS[k]);
+  // Grammar of the day: the current chapter's grammar point.
+  const dayGrammarId = (chapGrammarId && typeof GRAMMAR !== 'undefined' && GRAMMAR[chapGrammarId]) ? chapGrammarId : null;
+  // Closing review pool: today's new words mixed with the weakest ones.
+  const reviewIds = [...new Set([...weakIds, ...dayVocabIds])].filter(realInScope).slice(0, 8);
+  // The vocab ids backing the day's verbs, so practice can include them.
+  const dayVerbVocabIds = dayVerbKeys.map(inf => { const v = VOCAB.find(x => x.pos === 'verb' && x.it === inf); return v ? v.id : null; }).filter(Boolean);
+
+  // ===================== THE TEACH-FIRST SEQUENCE =====================
+  // Steps 1-4 are the core and always present. Step 5 (read) needs 30+ minutes,
+  // step 6 (mixed review) needs 45+. Every step returns to this flow on finish.
+
+  // 1. Vocab of the day (teach)
+  if (dayVocabIds.length > 0) {
+    s.push({ id: 'teach_vocab', kind: 'teachVocab', refId: 'day_vocab', icon: 'V', title: 'Vocabolario del giorno', sub: `${dayVocabIds.length} words to learn and reinforce`, mins: 5 });
   }
-  // 4. Reading (any unread story)
-  const unread = STORIES.find(st => !st.locked && !STATE.stories[st.id]?.completed && st.type !== 'magazine');
-  if (unread && minutes >= 20) s.push({ id: `story_${unread.id}`, kind: 'story', refId: unread.id, icon: 'R', title: unread.title, sub: `Read · ${unread.italian}`, mins: unread.mins });
-  // 5. Mixed practice for variety
-  if (minutes >= 30) s.push({ id: 'mixed_practice', kind: 'practice', refId: 'mixed', icon: 'M', title: 'Mixed practice', sub: 'Various exercise types from your vocab', mins: 8 });
-  // 6. Conversation roleplay (auto-pick varied scenario)
-  if (minutes >= 45) {
-    const scenarioIdx = new Date().getDate() % CONVERSA_SCENARIOS.length;
-    const scenario = CONVERSA_SCENARIOS[scenarioIdx];
-    s.push({ id: 'today_roleplay', kind: 'conversa', refId: scenario.id, icon: 'C', title: `Roleplay: ${scenario.name}`, sub: scenario.setting, mins: 10 });
+  // 2. Verbs of the day (teach)
+  if (dayVerbKeys.length > 0) {
+    s.push({ id: 'teach_verbs', kind: 'teachVerbs', refId: 'day_verbs', icon: 'N', title: 'Verbi del giorno', sub: `${dayVerbKeys.length} verb${dayVerbKeys.length===1?'':'s'}, present tense`, mins: 4 });
   }
-  // 7. Magazine/cultural read for longer sessions
-  if (minutes >= 60) {
-    const mag = STORIES.find(st => st.type === 'magazine' && !STATE.stories[st.id]?.completed);
-    if (mag) s.push({ id: `mag_${mag.id}`, kind: 'story', refId: mag.id, icon: 'M', title: mag.title, sub: `Cultural · ${mag.italian}`, mins: mag.mins });
+  // 3. Grammar moment (teach)
+  if (dayGrammarId) {
+    s.push({ id: `teach_grammar_${dayGrammarId}`, kind: 'teachGrammar', refId: dayGrammarId, icon: 'G', title: GRAMMAR[dayGrammarId].title, sub: 'The grammar focus, explained', mins: 4 });
   }
-  // 8. Maintenance mode (course complete): add a book chapter and a Parlare
-  // prompt so the day spans weak words, stories, books and free production.
-  if (courseComplete()) {
-    const nextBookCh = getNextBookChapter();
-    if (nextBookCh && minutes >= 20) {
-      const bf = bookFindChapter(nextBookCh);
-      if (bf) s.push({ id: `book_${nextBookCh}`, kind: 'book', refId: nextBookCh, icon: 'B', title: (bf.chapter.titleEnglish || bf.chapter.titleItalian), sub: `Read · ${bf.book.title}`, mins: 6 });
-    }
-    if (minutes >= 20) s.push({ id: 'maint_parlare', kind: 'parlare', refId: 'parlare', icon: 'P', title: 'Parlare: write something', sub: 'Free production from a prompt', mins: 6 });
+  // 4. Practice (core) over today's words and verbs
+  s.push({ id: 'today_practice', kind: 'practice', refId: 'day_practice', icon: 'P', title: 'Practice', sub: "Drills on today's words and verbs", mins: 8 });
+  // 5. Read a level-appropriate story (no duplicate, never above level)
+  if (minutes >= 30) {
+    const unread = STORIES.find(st => !st.locked && !STATE.stories[st.id]?.completed && st.type !== 'magazine' && isAtOrBelowLevel(st.level, cap));
+    if (unread) s.push({ id: `today_story_${unread.id}`, kind: 'story', refId: unread.id, icon: 'S', title: unread.title, sub: `Read · ${unread.italian}`, mins: unread.mins || 6 });
   }
-  // Store the actual weak/due IDs so startTodayItem can pick them up
-  STATE._todayPool = { weakIds, dueIds };
+  // 6. Mixed review: today's new words mixed with weak ones
+  if (minutes >= 45 && reviewIds.length > 0) {
+    s.push({ id: 'today_review', kind: 'practice', refId: 'day_review', icon: 'R', title: 'Mixed review', sub: "Today's new words mixed with your weak ones", mins: 6 });
+  }
+  // Store the day's pools so startTodayItem can read them (cached for the day).
+  STATE._todayPool = { weakIds, dueIds, dayVocabIds, dayVerbKeys, dayVerbVocabIds, dayGrammarId, reviewIds };
   return s;
 }
 // Bug #1 fix (file 07): never render "undefined min". Any step/lesson/story whose
@@ -9722,7 +9856,7 @@ function buildTodaySession(minutes) {
 // of printing undefined. All current items carry mins; this is the safety net.
 function safeMins(m, kind) {
   if (typeof m === 'number' && !isNaN(m) && m > 0) return m;
-  const est = { practice: 6, lesson: 6, story: 7, conversa: 10, write: 8 };
+  const est = { practice: 6, lesson: 6, story: 7, conversa: 10, write: 8, teachVocab: 5, teachVerbs: 4, teachGrammar: 4 };
   return est[kind] || 5;
 }
 function renderToday() {
@@ -9740,7 +9874,10 @@ function renderToday() {
     <div class="eyebrow">Today · ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}${maint ? ' · Maintenance mode' : ''}</div>
     <h1 class="h1">${target} minutes, built for you.</h1>
     ${maint ? `<div class="card" style="max-width:720px; margin:0 0 18px; border-color:var(--leaf-border); background:var(--leaf-wash);"><div class="eyebrow" style="color:var(--leaf-text);">Course complete</div><div style="font-size:14px; color:var(--ink-2); margin-top:6px;">You have finished all 14 chapters. Today is now a maintenance rhythm: your weakest words and spaced review, plus stories, books and Parlare to keep everything alive.</div></div>` : ''}
-    <p class="lede">${maint ? 'A review sequence drawn from your weakest words, words due for spaced review, and comprehensible input from stories and books. Follow it in order, then write something in Parlare.' : 'A sequence drawn from your weakest words (warm-up review), your next course lesson, and a piece of comprehensible input. Follow it in order: each step feeds the next.'}</p>
+    <p class="lede">${maint ? 'A review sequence drawn from your weakest words, words due for spaced review, and comprehensible input from stories and books. Follow it in order, then write something in Parlare.' : 'First you learn: the day\'s words and verbs, then the grammar focus. Then you practise them, read something at your level, and finish with a mixed review. Follow it in order, each step feeds the next.'}</p>
+    <div style="max-width:720px; margin-bottom:14px;">
+      <div class="text-muted" style="font-size:12.5px;">${maint ? '' : 'Your words and verbs today come from your current chapter and from what your progress marks as weak or due, never random.'}</div>
+    </div>
     <div style="max-width:720px; margin-bottom:18px;">
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;">
         <div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em;">Time progress</div>
@@ -9785,7 +9922,7 @@ function startTodayItem(kind, refId, itemId, chapterId) {
   // entry treats "the user started this step" as completion, which is what
   // they actually do day-to-day. Practice and conversa kinds keep the
   // completion-on-end logic because they have clean terminal screens.
-  if (kind === 'lesson' || kind === 'story' || kind === 'book' || kind === 'parlare') {
+  if (kind === 'lesson' || kind === 'story' || kind === 'book' || kind === 'parlare' || kind === 'teachVocab' || kind === 'teachVerbs' || kind === 'teachGrammar') {
     markTodayStepComplete(itemId);
   }
   if (kind === 'practice') {
@@ -9801,9 +9938,23 @@ function startTodayItem(kind, refId, itemId, chapterId) {
     } else if (refId === 'srs_due') {
       const dueIds = (STATE._todayPool && STATE._todayPool.dueIds) || [];
       startExerciseSession({ source: 'srs', vocabIds: dueIds, ...ctx });
+    } else if (refId === 'day_practice') {
+      // Drill exactly the words and verbs taught earlier in today's flow.
+      const pool = STATE._todayPool || {};
+      const ids = [...new Set([...(pool.dayVocabIds || []), ...(pool.dayVerbVocabIds || [])])];
+      startExerciseSession({ source: 'today-practice', vocabIds: ids, ...ctx });
+    } else if (refId === 'day_review') {
+      const pool = STATE._todayPool || {};
+      startExerciseSession({ source: 'today-review', vocabIds: (pool.reviewIds || []), ...ctx });
     } else {
       startExerciseSession({ source: 'mixed', ...ctx });
     }
+  } else if (kind === 'teachVocab') {
+    navigate('todayTeachVocab', { fromToday: true, todayItemId: itemId });
+  } else if (kind === 'teachVerbs') {
+    navigate('todayTeachVerbs', { fromToday: true, todayItemId: itemId });
+  } else if (kind === 'teachGrammar') {
+    navigate('todayTeachGrammar', { fromToday: true, todayItemId: itemId, grammarId: refId });
   } else if (kind === 'lesson') navigate('lesson', { lessonId: refId, chapterId, ...ctx });
   else if (kind === 'story') navigate('story', { storyId: refId, ...ctx });
   else if (kind === 'conversa') {
@@ -9858,6 +10009,110 @@ let todayCountdownInterval = null;
 function cancelTodayAutoAdvance() {
   if (todayAutoAdvanceTimer) { clearTimeout(todayAutoAdvanceTimer); todayAutoAdvanceTimer = null; }
   if (todayCountdownInterval) { clearInterval(todayCountdownInterval); todayCountdownInterval = null; }
+}
+
+// ===== TODAY TEACHING SCREENS =====
+// These are part of the Today flow. Each ends with a single Continue button that
+// calls advanceTodayOrHome(), so the learner is always carried to the next step
+// (or the Today list when finished) and never stranded.
+function todayFlowFooter(label) {
+  const next = getNextTodayStep();
+  const cont = next
+    ? `<button class="btn btn-primary" onclick="advanceTodayOrHome()">Continue → ${htmlText(next.title)}</button>`
+    : `<button class="btn btn-primary" onclick="navHome('today')">✓ Done for today</button>`;
+  return `<div class="row-end mt-8" style="max-width:760px; gap:10px; flex-wrap:wrap;">
+      <div class="text-muted" style="font-size:13px;">${label || 'When you are ready:'}</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${cont}
+        <button class="btn btn-ghost" onclick="navHome('today')">Today's list</button>
+      </div>
+    </div>`;
+}
+function renderTodayTeachVocab() {
+  renderCrumb([{ label: 'Today', action: `navHome('today')` }, { label: 'Vocabolario del giorno' }]);
+  const ids = (STATE._todayPool && STATE._todayPool.dayVocabIds) || [];
+  const words = ids.map(id => VOCAB.find(v => v.id === id)).filter(Boolean);
+  const cards = words.map(v => {
+    const sv = STATE.vocab[v.id];
+    const f = sv ? sv.fragility : 0.8;
+    const status = !sv || sv.attempts === 0 ? 'New' : (f >= 0.6 ? 'Weak' : f >= 0.3 ? 'Familiar' : 'Mastered');
+    const ex = v.ex ? `<div class="text-muted" style="font-size:13.5px; margin-top:6px;"><span class="it">${v.ex.it}</span> : ${htmlText(v.ex.en)}</div>` : '';
+    return `<div class="card" style="margin:0 0 10px; padding:16px 18px;">
+      <div style="display:flex; align-items:baseline; gap:10px;">
+        <div class="h3" style="margin:0;">${v.it}</div>
+        <span class="tag" style="font-size:10px;">${v.pos}${v.gender ? '·'+v.gender : ''}</span>
+        <span class="tag tag-accent" style="font-size:10px;">${status}</span>
+        <button class="btn-icon-audio" style="margin-left:auto;" onclick="speak('${jsArg(v.it)}')" title="Listen">▸</button>
+      </div>
+      <div style="font-size:15px; color:var(--ink-1); margin-top:4px;">${htmlText(v.en)}</div>
+      ${ex}
+    </div>`;
+  }).join('');
+  main.innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">← Today's list</button>
+    <div class="eyebrow">Today · Step 1 · Vocabolario del giorno</div>
+    <h1 class="h1" style="margin-bottom:8px;">Words for today.</h1>
+    <p class="lede" style="max-width:720px;">These come from your current chapter and the words your progress says need work (weak and due for review). Listen to each, then continue to your verbs.</p>
+    <div style="max-width:760px; margin-top:18px;">${cards || '<div class="text-muted">No words queued today.</div>'}</div>
+    ${todayFlowFooter('Learned these? Next: your verbs of the day.')}`;
+}
+function renderTodayTeachVerbs() {
+  renderCrumb([{ label: 'Today', action: `navHome('today')` }, { label: 'Verbi del giorno' }]);
+  const keys = (STATE._todayPool && STATE._todayPool.dayVerbKeys) || [];
+  const persons = [['io','io'],['tu','tu'],['lui','lui/lei'],['noi','noi'],['voi','voi'],['loro','loro']];
+  const cards = keys.map(k => {
+    const verb = CONJUGATIONS[k];
+    if (!verb) return '';
+    const pres = verb.presente || {};
+    const rows = persons.map(([p, lbl]) => `<div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--line);">
+        <span style="color:var(--ink-3);">${lbl}</span>
+        <span class="it" style="font-weight:600; color:var(--accent);">${pres[p] || '-'}</span>
+      </div>`).join('');
+    return `<div class="card" style="margin:0 0 12px; padding:16px 18px;">
+      <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:8px;">
+        <div class="h3" style="margin:0;">${verb.infinitive}</div>
+        <span class="tag" style="font-size:10px;">${verb.group}</span>
+        ${verb.irregular ? '<span class="tag tag-accent" style="font-size:10px;">irregular</span>' : ''}
+        <button class="btn-icon-audio" style="margin-left:auto;" onclick="speak('${jsArg(verb.infinitive)}')" title="Listen">▸</button>
+      </div>
+      <div style="font-size:14px; color:var(--ink-2); margin-bottom:10px;">${htmlText(verb.english)}</div>
+      <div style="font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Presente</div>
+      ${rows}
+    </div>`;
+  }).join('');
+  main.innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">← Today's list</button>
+    <div class="eyebrow">Today · Step 2 · Verbi del giorno</div>
+    <h1 class="h1" style="margin-bottom:8px;">Verbs for today.</h1>
+    <p class="lede" style="max-width:720px;">Drawn from your chapter and the verbs your progress flags as weak. Learn the present tense here; open any verb for all six tenses.</p>
+    <div style="max-width:760px; margin-top:18px;">${cards || '<div class="text-muted">No verbs queued today.</div>'}</div>
+    ${todayFlowFooter('Got these? Next: the grammar focus.')}`;
+}
+function renderTodayTeachGrammar() {
+  const gid = STATE.context?.grammarId || (STATE._todayPool && STATE._todayPool.dayGrammarId);
+  const g = (typeof GRAMMAR !== 'undefined' && gid) ? GRAMMAR[gid] : null;
+  renderCrumb([{ label: 'Today', action: `navHome('today')` }, { label: 'Grammatica' }]);
+  if (!g) { // nothing to teach: skip straight on
+    main.innerHTML = `<div class="eyebrow">Today · Grammar</div><h1 class="h1">All set.</h1><p class="lede">No new grammar focus for today.</p>${todayFlowFooter()}`;
+    return;
+  }
+  const ex = (g.examples || []).slice(0, 2).map(e => `<div style="padding:10px 12px; background:var(--accent-wash); border-radius:var(--r-sm); margin-bottom:8px;">
+      <div class="it" style="font-weight:500;">${e.it}</div>
+      <div class="text-muted" style="font-size:13px; margin-top:2px;">${htmlText(e.en)}</div>
+      ${e.note ? `<div style="font-size:12px; color:var(--ink-3); margin-top:4px;">${htmlText(e.note)}</div>` : ''}
+    </div>`).join('');
+  main.innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">← Today's list</button>
+    <div class="eyebrow">Today · Step 3 · ${g.italian || 'Grammatica'}</div>
+    <h1 class="h1" style="margin-bottom:8px;">${g.title}</h1>
+    ${g.lede ? `<p class="lede" style="max-width:720px;">${htmlText(g.lede)}</p>` : ''}
+    <div class="card" style="max-width:760px; margin-top:14px; padding:18px;">
+      <div style="font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">The rule</div>
+      <div style="font-size:15px; line-height:1.7; color:var(--ink-1);">${htmlText(g.rule || '')}</div>
+      ${ex ? `<div style="margin-top:16px;"><div style="font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Examples</div>${ex}</div>` : ''}
+      <button class="btn btn-ghost btn-sm" style="margin-top:14px;" onclick="navigate('grammar', {grammarTopic:'${gid}', fromTodayGrammar:true})">See the full topic →</button>
+    </div>
+    ${todayFlowFooter('Make sense? Next: practice.')}`;
 }
 
 // ==== COURSE ====
@@ -10344,7 +10599,7 @@ function renderGrammar() {
   const openSection = STATE.grammarOpenSection ?? 'rule';
 
   main.innerHTML = `
-    ${STATE.context?.returnLesson ? `<button class="btn btn-ghost btn-sm" onclick="navBack()" style="margin-bottom:14px;">← Back to lesson</button>` : ''}
+    ${STATE.context?.returnLesson ? `<button class="btn btn-ghost btn-sm" onclick="navBack()" style="margin-bottom:14px;">← Back to lesson</button>` : (STATE.context?.fromTodayGrammar ? `<button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">← Back to today</button>` : '')}
     <div class="eyebrow">Grammar reference · Dependency-ordered</div>
     <h1 class="h1">Italian grammar.</h1>
     <p class="lede">Topics in the order they build on each other. Each topic has five collapsible sections. Open what you need, ignore the rest.</p>
@@ -12859,7 +13114,9 @@ function renderBookChapter() {
     const en = _btr[i];
     const trBtn = en ? ` <button class="book-para-tr" onclick="const e=this.closest('.book-para-block').querySelector('.book-para-en'); e.classList.toggle('open'); this.classList.toggle('on'); this.textContent=e.classList.contains('open')?'Hide':'Translate';">Translate</button>` : '';
     const enBlock = en ? `<div class="book-para-en">${en}</div>` : '';
-    return `<div class="book-para-block"><p class="book-para"><button class="book-para-audio" title="Listen" onclick="speak(this.getAttribute('data-t'),{})" data-t="${p.replace(/"/g, '&quot;')}">\u25b6</button>${p}${trBtn}</p>${enBlock}</div>`;
+    const _turns = splitDialogueTurns(p);
+    const pHtml = _turns.length > 1 ? _turns.map(t => `<span class="dlg-line">${t}</span>`).join('') : p;
+    return `<div class="book-para-block"><p class="book-para"><button class="book-para-audio" title="Listen" onclick="speak(this.getAttribute('data-t'),{})" data-t="${p.replace(/"/g, '&quot;')}">\u25b6</button>${pHtml}${trBtn}</p>${enBlock}</div>`;
   }).join('');
   const vocabRows = chapter.vocabulary.map(w =>
     `<div class="book-vocab-row"><button class="book-vocab-audio" onclick="speak('${w.italian.replace(/'/g, "\\'")}',{})">\u25b6</button><span class="book-vocab-it">${w.italian}</span><span class="book-vocab-en">${w.english}</span></div>`).join('');
@@ -12968,7 +13225,10 @@ function renderStoryReader() {
   if (!STATE.stories[s.id]) STATE.stories[s.id] = { progress: 0, paragraphsRead: 0 };
 
   const bodyParas = s.body.map((p, idx) => {
-    const tappable = renderTappableText(p.it, p.words || {});
+    const turns = splitDialogueTurns(p.it);
+    const tappable = turns.length > 1
+      ? turns.map(t => `<span class="dlg-line">${renderTappableText(t, p.words || {})}</span>`).join('')
+      : renderTappableText(p.it, p.words || {});
     return `<div class="story-para-row">
       <button class="btn-icon-audio story-para-audio" onclick="speak('${p.it.replace(/'/g,"\\'").replace(/\n/g,' ')}')">▸</button>
       <div style="flex:1;">
@@ -13013,6 +13273,21 @@ function renderStoryReader() {
   STATE.stories[s.id].progress = Math.max(STATE.stories[s.id].progress, 50);
   saveState();
 }
+// Fix 7: break a run-on dialogue paragraph into one line per speaker turn.
+// Italian stories open each line of speech with a hyphen directly before the words
+// ("-Ciao!") and close speech before a narration tag with hyphen+space ("- dice").
+// We split only on the opening-speech hyphens (hyphen followed by a non-space,
+// non-hyphen char) so narration tags stay attached to the speech they belong to.
+// If a paragraph has fewer than two such turns it is left untouched. Hyphens are
+// preserved; no em-dashes are introduced.
+function splitDialogueTurns(text) {
+  if (!text) return [text];
+  const re = /(^|\s)-(?=[^\s-])/g;
+  const matches = text.match(re);
+  if (!matches || matches.length < 2) return [text];
+  const marked = text.replace(re, (m, p1) => p1 + '\u0001-');
+  return marked.split('\u0001').map(s => s.trim()).filter(Boolean);
+}
 function renderTappableText(text, words) {
   // Split keeping punctuation
   return text.split(/(\s+|[.,!?;:"'])/).map(tok => {
@@ -13035,6 +13310,44 @@ function readWholeStory(sid) {
   // Read paragraph by paragraph with pauses between
   const fullText = s.body.map(p => p.it).join(' ');
   speak(fullText);
+}
+// Play the entire Conversa exchange as a two-sided dialogue: each "them" line in
+// the speaker's gendered voice, each "me" line in a male voice. Acts as a toggle:
+// tapping again stops playback. Sequential, so lines never overlap.
+let _conversaReadAll = false;
+async function readWholeConversa() {
+  const btn = () => document.getElementById('conversa-play-all');
+  if (_conversaReadAll) {
+    _conversaReadAll = false;
+    try { neuralStop(); } catch (e) {}
+    try { stopSpeak(); } catch (e) {}
+    const b = btn(); if (b) b.textContent = '▸ Play dialogue';
+    return;
+  }
+  const activeId = STATE.chatScenarioId || 'sc_maria_arrival';
+  const scenario = CONVERSA_SCENARIOS.find(s => s.id === activeId) || CONVERSA_SCENARIOS[0];
+  const msgs = (STATE.chat || []).filter(m => m && m.it && String(m.it).trim());
+  if (!msgs.length) return;
+  _conversaReadAll = true;
+  if (STATE.chat) STATE.chat._spoken = true; // suppress the single-line auto-play
+  { const b = btn(); if (b) b.textContent = '⏹ Stop'; }
+  for (let i = 0; i < msgs.length; i++) {
+    if (!_conversaReadAll || !btn()) break;            // stopped, or navigated away
+    const m = msgs[i];
+    const opts = m.from === 'me' ? myVoiceOpts() : conversaVoiceOpts(scenario.id);
+    const words = String(m.it).split(/\s+/).length;
+    const maxMs = words * 900 + 4000;                  // safety cap so a silent fallback can't hang
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      const t = setTimeout(finish, maxMs);
+      speak(m.it, Object.assign({}, opts, { onEnd: () => { clearTimeout(t); finish(); } }));
+    });
+    if (!_conversaReadAll || !btn()) break;
+    await new Promise(r => setTimeout(r, 280));         // gap between turns
+  }
+  _conversaReadAll = false;
+  const b = btn(); if (b) b.textContent = '▸ Play dialogue';
 }
 function markStoryRead(sid) {
   if (!STATE.stories[sid]) STATE.stories[sid] = {};
@@ -14163,26 +14476,24 @@ function generateExercises(opts) {
     const options = [correctArt, ...distractors].sort(() => Math.random()-0.5);
     items.push({ type: 'articleChoice', vocabId: v.id, audioText: v.it, prompt: `Choose the correct article: <span class="it">___ ${bare}</span>`, hint: `(${v.en})`, options, correct: options.indexOf(correctArt), explain: `Correct: ${v.it}. Gender: ${v.gender === 'f' ? 'feminine' : 'masculine'}. ${v.en}` });
   });
-  // 8. Conjugate (1-2): produce a verb form
-  const verbsForConj = pool.filter(v => v.pos === 'verb' && (v.it.endsWith('are') || v.it.endsWith('ere') || v.it.endsWith('ire')) && !v.it.includes('si') && !v.it.includes(' '));
-  const persons = [
-    { p: 'io', a: 'o', e: 'o', i: 'o' },
-    { p: 'tu', a: 'i', e: 'i', i: 'i' },
-    { p: 'lui', a: 'a', e: 'e', i: 'e' },
-    { p: 'noi', a: 'iamo', e: 'iamo', i: 'iamo' },
-    { p: 'voi', a: 'ate', e: 'ete', i: 'ite' },
-    { p: 'loro', a: 'ano', e: 'ono', i: 'ono' }
-  ];
-  verbsForConj.slice(0, 2).forEach(v => {
+  // 8. Conjugate (1-2): produce a verb form. The correct answer is ALWAYS taken
+  // from the curated CONJUGATIONS table, which is hand-verified and already
+  // carries the spelling rules (mangi, mangiamo, cerchi, paghi). We never
+  // rebuild a form from stem+ending here: that previously taught wrong forms
+  // like "mangii"/"mangiiamo". A verb not present in the table is simply skipped
+  // for this exercise rather than risking an unverified form.
+  const verbsForConj = pool.filter(v => v.pos === 'verb' && (v.it.endsWith('are') || v.it.endsWith('ere') || v.it.endsWith('ire')) && !/(arsi|ersi|irsi)$/.test(v.it) && !v.it.includes(' '));
+  const conjPersons = ['io', 'tu', 'lui', 'noi', 'voi', 'loro'];
+  verbsForConj.forEach(v => {
     if (items.filter(i => i.type === 'conjugate').length >= 2) return;
-    const conjugation = v.it.endsWith('are') ? 'a' : v.it.endsWith('ere') ? 'e' : 'i';
-    const stem = v.it.slice(0, -3);
-    // Skip irregular common ones (essere, avere, andare, etc) since they don't follow regular patterns
-    const irregulars = ['essere', 'avere', 'andare', 'venire', 'fare', 'dare', 'stare', 'dire', 'sapere', 'volere', 'potere', 'dovere', 'uscire', 'tenere', 'rimanere', 'piacere', 'sedersi', 'morire'];
-    if (irregulars.includes(v.it)) return;
-    const personPick = persons[Math.floor(Math.random() * persons.length)];
-    const correctForm = stem + personPick[conjugation];
-    items.push({ type: 'conjugate', vocabId: v.id, audioText: correctForm, prompt: `Conjugate <em>${v.it}</em> for <strong>${personPick.p}</strong>: <span class="it">${personPick.p} ___</span>`, correct: [correctForm.toLowerCase()], explain: `${personPick.p} ${correctForm}. Infinitive: ${v.it} (${v.en}).` });
+    const table = CONJUGATIONS[v.it] && CONJUGATIONS[v.it].presente;
+    if (!table) return;
+    const avail = conjPersons.filter(p => table[p]);
+    if (!avail.length) return;
+    const person = avail[Math.floor(Math.random() * avail.length)];
+    const correctForm = table[person];
+    if (!correctForm) return;
+    items.push({ type: 'conjugate', vocabId: v.id, audioText: correctForm, prompt: `Conjugate <em>${v.it}</em> for <strong>${person}</strong>: <span class="it">${person} ___</span>`, correct: [String(correctForm).toLowerCase().trim()], explain: `${person} ${correctForm}. Infinitive: ${v.it} (${v.en}).` });
   });
   // 9. Dialogue response (1-2): conversation context with reply options
   const dialogues = [
@@ -14810,7 +15121,7 @@ function renderExerciseComplete() {
 
   const nextStep = sess.fromToday ? getNextTodayStep() : null;
   const autoAdvanceHint = nextStep
-    ? `<div class="text-muted" id="auto-advance-hint" style="font-size:12.5px; margin-bottom:14px;">Continuing to <strong>${nextStep.title}</strong> in <span id="auto-advance-secs">3</span>s. Tap any button to choose instead.</div>`
+    ? `<div class="text-muted" id="auto-advance-hint" style="font-size:12.5px; margin-bottom:14px;">Next up: <strong>${nextStep.title}</strong>. Choose below when you are ready.</div>`
     : '';
 
   main.innerHTML = `
@@ -14830,22 +15141,9 @@ function renderExerciseComplete() {
         </div>
       </div>
     </div>`;
-  // A6: hands-free progression. If this finished a Today step and another step
-  // remains, auto-advance after a readable pause. Guarded on the marker element
-  // so it never fires once the user has navigated elsewhere; cancelled the
-  // moment the user taps any control above.
+  // A6: auto-advance removed. The user now controls progression explicitly via the
+  // buttons above. We still cancel any stale timer defensively on render.
   cancelTodayAutoAdvance();
-  if (sess.fromToday && getNextTodayStep()) {
-    let secsLeft = 3;
-    todayCountdownInterval = setInterval(() => {
-      secsLeft -= 1;
-      const el = document.getElementById('auto-advance-secs');
-      if (el) el.textContent = String(Math.max(secsLeft, 0));
-    }, 1000);
-    todayAutoAdvanceTimer = setTimeout(() => {
-      if (document.getElementById('ex-complete-marker')) advanceTodayOrHome();
-    }, 3000);
-  }
   // Keep the session around only long enough for the confidence buttons to read it;
   // clearing happens on the chosen navigation. For non-grammar, clear now.
   if (!sess.returnGrammar) STATE.exerciseSession = null;
@@ -15193,6 +15491,16 @@ function renderConversa() {
   }
   const activeId = STATE.chatScenarioId || 'sc_maria_arrival';
   const scenario = CONVERSA_SCENARIOS.find(s => s.id === activeId) || CONVERSA_SCENARIOS[0];
+  // Gendered voice options for this scenario, embedded into the play buttons so a
+  // male character is read in a male voice (and vice versa).
+  const _vg = CONVERSA_GENDER[scenario.id];
+  const _vOpts = _vg ? { voice: genderedNeuralVoice(_vg), voiceGender: _vg } : {};
+  const vJson = JSON.stringify(_vOpts);
+  const vJsonSlow = JSON.stringify(Object.assign({ rate: 0.65 }, _vOpts));
+  // The learner's own lines and answer options are read in a male voice.
+  const _myOpts = { voice: genderedNeuralVoice('male'), voiceGender: 'male' };
+  const myJson = JSON.stringify(_myOpts);
+  const myJsonSlow = JSON.stringify(Object.assign({ rate: 0.65 }, _myOpts));
   if (!STATE.chat || STATE.chat.length === 0) {
     STATE.chat = [{ from: 'them', it: scenario.greeting.it, en: scenario.greeting.en }];
     STATE.chatSuggestions = null;
@@ -15241,14 +15549,18 @@ function renderConversa() {
             <div class="chat-hd-name">${scenario.name}</div>
             <div class="chat-hd-scenario">${scenario.setting} · level ${scenario.level}</div>
           </div>
+          <button class="btn btn-sm btn-ghost" onclick="readWholeConversa()" id="conversa-play-all" title="Hear the whole conversation as a dialogue">▸ Play dialogue</button>
           <button class="btn btn-sm btn-ghost" onclick="resetChat()" title="Reset conversation">↻ Reset</button>
         </div>
         <div class="chat-body" id="chat-body">
           ${STATE.chat.map((m, i) => `<div class="bubble-row ${m.from}">
             ${m.from === 'them' ? `<div class="bubble-audio-stack">
-              <button class="btn-icon-audio bubble-audio" onclick="speak('${jsArg(m.it)}')" title="Play">▸</button>
-              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="speak('${jsArg(m.it)}', {rate: 0.65})" title="Slow replay">🐢</button>
-            </div>` : ''}
+              <button class="btn-icon-audio bubble-audio" onclick="speak('${jsArg(m.it)}', ${vJson})" title="Play">▸</button>
+              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="speak('${jsArg(m.it)}', ${vJsonSlow})" title="Slow replay">🐢</button>
+            </div>` : `<div class="bubble-audio-stack">
+              <button class="btn-icon-audio bubble-audio" onclick="speak('${jsArg(m.it)}', ${myJson})" title="Play (your line)">▸</button>
+              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="speak('${jsArg(m.it)}', ${myJsonSlow})" title="Slow replay">🐢</button>
+            </div>`}
             <div class="bubble ${m.from}">
               ${htmlText(m.it)}
               ${m.en ? `<div class="bubble-trans">${htmlText(m.en)}</div>` : ''}
@@ -15264,6 +15576,7 @@ function renderConversa() {
               <span class="chat-suggest-it">${htmlText(c.it)}</span>
               ${c.en ? `<span class="chat-suggest-en">${htmlText(c.en)}</span>` : ''}
             </button>
+            <button class="chat-suggest-practice" onclick="speak('${jsArg(c.it)}', ${myJson})" title="Hear this option">▸</button>
             <button class="chat-suggest-practice" onclick="openPronunciationDrill('${jsArg(c.it)}')" title="Practice saying this aloud">🎤</button>
           </div>`;
           }).join('')}
@@ -15284,7 +15597,7 @@ function renderConversa() {
   const last = STATE.chat[STATE.chat.length - 1];
   if (last && last.from === 'them' && !STATE.chat._spoken) {
     STATE.chat._spoken = true;
-    setTimeout(() => speak(last.it), 400);
+    setTimeout(() => speak(last.it, conversaVoiceOpts(scenario.id)), 400);
   }
 }
 function switchScenario(scenarioId) {
@@ -15357,18 +15670,25 @@ async function callClaudeAPI(scenario, history) {
   // needs: the character must always carry the conversation (end on a
   // question, never a dead end), and must hand back 3 short things Kobi could
   // say next so she is never stranded without words.
+  const charGender = CONVERSA_GENDER[scenario.id];
+  const genderLine = charGender
+    ? `6. You are speaking as a ${charGender} character. Use ${charGender === 'male' ? 'masculine' : 'feminine'} agreement when referring to yourself (adjectives, past participles).`
+    : '';
   const directive = [
     '',
     'GLOBAL RULES (these OVERRIDE any earlier formatting instruction above):',
-    '1. Kobi is a beginner (A1) and cannot lead the conversation. YOU lead it. ALWAYS end your Italian reply with a question or a warm, concrete invitation for her to respond. Never end on a flat statement or a full stop with nothing after it. Never let the conversation reach a dead end.',
+    '1. Kobi is a beginner (A1) and cannot lead the conversation. YOU lead it. ALWAYS end your Italian reply with a question or a warm, concrete invitation for him to respond. Never end on a flat statement or a full stop with nothing after it. Never let the conversation reach a dead end.',
     '2. Keep your Italian simple (A1-A2) and short: 1 to 3 short sentences, then your question.',
     '3. Stay fully in character the whole time.',
-    '4. Output EXACTLY this and nothing else:',
+    '4. Never use "Madonna" (or "Madonna mia", "Madonna santa") as an exclamation; it reads as blasphemy here. To express surprise or strong feeling use "Mamma mia", "Oddio", or "Mannaggia" instead.',
+    '5. Kobi is male. Address him and refer to him with masculine agreement.',
+    genderLine,
+    'Output EXACTLY this and nothing else:',
     '<your Italian reply, ending in a question>',
     'EN: <English translation>',
     'SUGGESTIONS: <it reply 1> :: <en 1> | <it reply 2> :: <en 2> | <it reply 3> :: <en 3>',
     'On the SUGGESTIONS line give 3 short, natural things KOBI could say back right now, each as the simple A1 Italian followed by " :: " and its English meaning, with the three options separated by " | ". They must directly fit the question you just asked.'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -15407,6 +15727,9 @@ async function callClaudeAPI(scenario, history) {
     it = body.substring(0, enIdx).trim();
     en = body.substring(enIdx).replace(/\n?\s*EN\s*:/i, '').trim();
   }
+  // Safety net: strip any "Madonna" exclamation the model produced anyway.
+  it = sanitizeExclamations(it);
+  suggestions = suggestions.map(o => ({ it: sanitizeExclamations(o.it), en: o.en }));
   return { it, en, suggestions };
 }
 // ==== PRONUNCIATION DRILL ====
@@ -15578,6 +15901,9 @@ function sendChatMessage(text) {
   STATE.chat._spoken = true;
   registerActivity();
   saveState(); render();
+  // Read the learner's own line back in a male voice so the chat plays from both
+  // sides. The reply (when it arrives) auto-plays in the speaker's gendered voice.
+  if (text && text.trim()) speak(text, myVoiceOpts());
   const activeId = STATE.chatScenarioId || 'sc_maria_arrival';
   const scenario = CONVERSA_SCENARIOS.find(s => s.id === activeId) || CONVERSA_SCENARIOS[0];
   if (STATE.claudeApiKey) {
@@ -15694,70 +16020,151 @@ function renderVerbCard(key, verb) {
       </div>
     </div>`;
 }
+// Verbs the learner has actually encountered (progress record), with their state.
+function knownVerbList() {
+  return VOCAB.filter(v => v.pos === 'verb' && STATE.vocab[v.id] && (v.custom || STATE.vocab[v.id].attempts > 0 || STATE.vocab[v.id].fragility !== 0.8))
+    .map(v => ({ v, sv: STATE.vocab[v.id], inf: v.it, hasTable: !!CONJUGATIONS[v.it] }));
+}
+// Counts of encountered verbs by knowledge status (mirrors knowledgeCounts).
+function verbKnowledgeCounts() {
+  const k = knownVerbList();
+  return {
+    total: k.length,
+    weak: k.filter(x => x.sv.fragility >= 0.6).length,
+    fam: k.filter(x => x.sv.fragility >= 0.3 && x.sv.fragility < 0.6).length,
+    mas: k.filter(x => x.sv.fragility < 0.3).length
+  };
+}
+// Verb count per topic across the full conjugation table (for the batch cards).
+function verbTopicCounts() {
+  const counts = {};
+  for (const [k, v] of Object.entries(CONJUGATIONS)) {
+    const t = getVerbTopic(k, v);
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  return counts;
+}
+function renderKnownVerbRows(list) {
+  if (!list.length) return '<div style="padding:50px 24px; text-align:center; color:var(--ink-3); font-size:14px;">No verbs match: try a different filter, or learn more through the course and themed batches above.</div>';
+  return list.map(({ v, sv, inf, hasTable }) => {
+    const f = sv.fragility;
+    const cls = f >= 0.6 ? 'weak' : f >= 0.3 ? 'fam' : 'mas';
+    const click = hasTable ? `STATE.activeVerb='${jsArg(inf)}'; STATE.verbTense='presente'; render()` : `showDictPop(event, '${v.id}')`;
+    return `<div class="vocab-row" onclick="${click}">
+      <div class="vocab-it">${v.it}<span class="vocab-pos">verb${hasTable ? '' : ' · no table'}</span></div>
+      <div class="vocab-en">${htmlText(v.en)}</div>
+      <button class="btn-icon-audio" onclick="event.stopPropagation(); speak('${jsArg(v.it)}')">▸</button>
+      <div class="vocab-bar"><div class="vocab-bar-fill ${cls}" style="width:${(1-f)*100}%"></div></div>
+      <div style="font-family:var(--mono); font-size:10px; color:var(--ink-3); text-transform:uppercase;">${v.level}</div>
+    </div>`;
+  }).join('');
+}
 function renderVerbs() {
   if (!STATE.verbFilter) STATE.verbFilter = 'all';
   if (!STATE.verbSearch) STATE.verbSearch = '';
-  if (!STATE.verbTopic) STATE.verbTopic = 'all';
+  if (!STATE.verbSort) STATE.verbSort = 'fragility';
   if (STATE.activeVerb) return renderVerbDetail();
   const allVerbs = Object.entries(CONJUGATIONS);
-  let list = allVerbs;
-  if (STATE.verbFilter === 'irregular') list = allVerbs.filter(([_, v]) => v.irregular);
-  else if (STATE.verbFilter === 'are') list = allVerbs.filter(([_, v]) => v.group.includes('-are'));
-  else if (STATE.verbFilter === 'ere') list = allVerbs.filter(([_, v]) => v.group.includes('-ere'));
-  else if (STATE.verbFilter === 'ire') list = allVerbs.filter(([_, v]) => v.group.includes('-ire'));
-  else if (STATE.verbFilter === 'reflexive') list = allVerbs.filter(([_, v]) => v.group.includes('reflexive'));
-  if (STATE.verbSearch) {
+  const c = verbKnowledgeCounts();
+
+  // SEARCH MODE: a query searches the full table and shows matching cards, so any
+  // of the verbs is findable even before it has been encountered.
+  if (STATE.verbSearch.trim()) {
     const q = STATE.verbSearch.toLowerCase();
-    list = list.filter(([k, v]) => k.toLowerCase().includes(q) || v.english.toLowerCase().includes(q));
-  }
-  // Topics present in the current (type+search) filtered set, in canonical order.
-  const presentTopics = VERB_TOPIC_ORDER.filter(t => list.some(([k, v]) => getVerbTopic(k, v) === t));
-  // If a specific topic is selected but no longer present, fall back to all.
-  if (STATE.verbTopic !== 'all' && !presentTopics.includes(STATE.verbTopic)) STATE.verbTopic = 'all';
-  const topicList = STATE.verbTopic === 'all' ? list : list.filter(([k, v]) => getVerbTopic(k, v) === STATE.verbTopic);
-
-  let body;
-  if (topicList.length === 0) {
-    body = '<div class="text-muted" style="text-align:center; padding:40px;">No verbs match your filters.</div>';
-  } else if (STATE.verbTopic === 'all') {
-    // Grouped view: a labelled section per topic so the long list is organised.
-    body = presentTopics.map(t => {
-      const verbs = list.filter(([k, v]) => getVerbTopic(k, v) === t);
-      if (!verbs.length) return '';
-      return `
-        <div class="verb-topic-section">
-          <div class="verb-topic-head">${VERB_TOPIC_LABELS[t]} <span class="verb-topic-count">${verbs.length}</span></div>
-          <div class="verb-grid">${verbs.map(([k, v]) => renderVerbCard(k, v)).join('')}</div>
-        </div>`;
-    }).join('');
-  } else {
-    // Single-topic flat grid.
-    body = `<div class="verb-grid">${topicList.map(([k, v]) => renderVerbCard(k, v)).join('')}</div>`;
+    const hits = allVerbs.filter(([k, v]) => k.toLowerCase().includes(q) || v.english.toLowerCase().includes(q));
+    main.innerHTML = `
+      <div class="eyebrow">Verbs · ${allVerbs.length} verbs with full conjugations · 6 tenses each</div>
+      <h1 class="h1">Italian verbs.</h1>
+      <div class="verb-controls">
+        <input class="verb-search" id="verb-search-input" placeholder="Search verbs (Italian or English)..." value="${STATE.verbSearch}" oninput="STATE.verbSearch=this.value; render(); setTimeout(()=>{const e=document.getElementById('verb-search-input'); if(e){e.focus(); e.setSelectionRange(e.value.length,e.value.length);}},0)" />
+        <button class="btn btn-ghost btn-sm" onclick="STATE.verbSearch=''; render()">Clear search</button>
+      </div>
+      <div class="section-sub" style="margin:14px 0;">${hits.length} match${hits.length===1?'':'es'}</div>
+      <div class="verb-grid">${hits.map(([k, v]) => renderVerbCard(k, v)).join('') || '<div class="text-muted" style="padding:30px;">No verbs match.</div>'}</div>`;
+    return;
   }
 
-  const topicChips = ['all', ...presentTopics].map(t =>
-    `<button class="verb-topic-chip ${STATE.verbTopic === t ? 'active' : ''}" onclick="STATE.verbTopic='${t}'; render()">${t === 'all' ? 'All topics' : VERB_TOPIC_LABELS[t]}</button>`
-  ).join('');
+  // Bottom list: encountered verbs, filtered by status, sorted.
+  let list = knownVerbList();
+  if (STATE.verbFilter === 'weak') list = list.filter(x => x.sv.fragility >= 0.6);
+  else if (STATE.verbFilter === 'fam') list = list.filter(x => x.sv.fragility >= 0.3 && x.sv.fragility < 0.6);
+  else if (STATE.verbFilter === 'mas') list = list.filter(x => x.sv.fragility < 0.3);
+  if (STATE.verbSort === 'alpha') list.sort((a, b) => a.inf.localeCompare(b.inf));
+  else list.sort((a, b) => b.sv.fragility - a.sv.fragility);
+
+  const tCounts = verbTopicCounts();
+  const batchCards = VERB_TOPIC_ORDER.filter(t => (tCounts[t] || 0) > 0 && t !== 'other').map(t =>
+    `<div class="theme-card" onclick="navigate('verb-topic', {verbTopic:'${t}'})">
+      <div class="theme-name">${VERB_TOPIC_LABELS[t]}</div>
+      <div class="theme-count">${tCounts[t]} verb${tCounts[t]===1?'':'s'}</div>
+    </div>`).join('');
 
   main.innerHTML = `
-    <div class="eyebrow">Verbs · ${allVerbs.length} verbs with full conjugations · 6 tenses each</div>
-    <h1 class="h1">Italian verbs.</h1>
-    <p class="lede">Tap any verb to see all six tenses fully conjugated. Filter by type below, or jump to a topic. Spot a mistake in any verb? Open it and tap Edit.</p>
-    <div class="verb-controls">
-      <input class="verb-search" placeholder="Search verbs (Italian or English)..." value="${STATE.verbSearch}" oninput="STATE.verbSearch=this.value; render()" />
-      <div class="verb-filters">
-        <button class="verb-filter ${STATE.verbFilter==='all'?'active':''}" onclick="STATE.verbFilter='all'; render()">All (${allVerbs.length})</button>
-        <button class="verb-filter ${STATE.verbFilter==='irregular'?'active':''}" onclick="STATE.verbFilter='irregular'; render()">Irregular</button>
-        <button class="verb-filter ${STATE.verbFilter==='are'?'active':''}" onclick="STATE.verbFilter='are'; render()">-are</button>
-        <button class="verb-filter ${STATE.verbFilter==='ere'?'active':''}" onclick="STATE.verbFilter='ere'; render()">-ere</button>
-        <button class="verb-filter ${STATE.verbFilter==='ire'?'active':''}" onclick="STATE.verbFilter='ire'; render()">-ire</button>
-        <button class="verb-filter ${STATE.verbFilter==='reflexive'?'active':''}" onclick="STATE.verbFilter='reflexive'; render()">Reflexive</button>
-        <button class="verb-filter" style="background:var(--accent); color:white; border-color:var(--accent);" onclick="openCustomVerbModal()">+ Add verb</button>
-      </div>
-      <div class="verb-topic-chips">${topicChips}</div>
+    <div class="hero-page italy">
+      <div class="eyebrow">Verbs · Conjugations & themed groups</div>
+      <h1 class="h1" style="margin-bottom:8px;">Your living verb bank.</h1>
+      <p class="lede" style="margin-bottom:14px;">Every verb with all six tenses. Pick a theme to browse a group, or open any verb for its full table. The list at the bottom is the verbs you have actually met, with how well you know each.</p>
+      <button class="btn btn-sm btn-primary" onclick="openCustomVerbModal()">+ Add your own verb</button>
     </div>
-    ${body}
-  `;
+    <div class="vocab-stats">
+      <div class="vocab-stat total"><div class="vocab-stat-num">${c.total}</div><div class="vocab-stat-lbl">Encountered</div></div>
+      <div class="vocab-stat weak"><div class="vocab-stat-num">${c.weak}</div><div class="vocab-stat-lbl">Weak</div></div>
+      <div class="vocab-stat fam"><div class="vocab-stat-num">${c.fam}</div><div class="vocab-stat-lbl">Familiar</div></div>
+      <div class="vocab-stat mas"><div class="vocab-stat-num">${c.mas}</div><div class="vocab-stat-lbl">Mastered</div></div>
+    </div>
+    <div class="section-head" style="margin-top:32px;">
+      <div><h2 class="h2">Themed groups</h2><div class="section-sub">${batchCards ? VERB_TOPIC_ORDER.filter(t => (tCounts[t]||0) > 0 && t !== 'other').length : 0} groups · ${allVerbs.length} verbs total · open one to browse</div></div>
+    </div>
+    <div class="theme-grid">${batchCards}</div>
+    <div class="section-head" style="margin-top:40px;">
+      <div><h2 class="h2">All verbs you know</h2><div class="section-sub">searchable · filterable · sortable · tap to open the table</div></div>
+    </div>
+    <div class="vocab-controls">
+      <input class="vocab-search" id="verb-search-input" placeholder="Search any verb (Italian or English)..." value="${STATE.verbSearch}" oninput="STATE.verbSearch=this.value; render()" />
+      <button class="chip ${STATE.verbFilter==='all'?'active':''}" onclick="STATE.verbFilter='all'; render()">All ${c.total}</button>
+      <button class="chip ${STATE.verbFilter==='weak'?'active':''}" onclick="STATE.verbFilter='weak'; render()">Weak ${c.weak}</button>
+      <button class="chip ${STATE.verbFilter==='fam'?'active':''}" onclick="STATE.verbFilter='fam'; render()">Familiar ${c.fam}</button>
+      <button class="chip ${STATE.verbFilter==='mas'?'active':''}" onclick="STATE.verbFilter='mas'; render()">Mastered ${c.mas}</button>
+      <button class="chip ${STATE.verbSort==='alpha'?'active':''}" onclick="STATE.verbSort=STATE.verbSort==='alpha'?'fragility':'alpha'; render()">${STATE.verbSort==='alpha'?'A-Z ↓':'By fragility'}</button>
+    </div>
+    <div class="vocab-list">${renderKnownVerbRows(list)}</div>`;
+}
+function renderVerbTopic() {
+  const t = STATE.context?.verbTopic;
+  if (!t || !VERB_TOPIC_LABELS[t]) return navHome('verbs');
+  if (STATE.activeVerb) return renderVerbDetail();
+  const verbs = Object.entries(CONJUGATIONS).filter(([k, v]) => getVerbTopic(k, v) === t)
+    .sort((a, b) => a[1].infinitive.localeCompare(b[1].infinitive));
+  renderCrumb([{ label: 'Verbs', action: `navHome('verbs')` }, { label: VERB_TOPIC_LABELS[t] }]);
+  main.innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="navHome('verbs')" style="margin-bottom:18px;">← All groups</button>
+    <div class="eyebrow">Verb group</div>
+    <h1 class="h1">${VERB_TOPIC_LABELS[t]} · ${verbs.length} verb${verbs.length===1?'':'s'}</h1>
+    <p class="lede">Tap any verb to see all six tenses. Practice the whole group as a conjugation drill below.</p>
+    <div class="verb-grid">${verbs.map(([k, v]) => renderVerbCard(k, v)).join('')}</div>
+    <div class="row-end mt-8">
+      <div><div class="h3" style="margin-bottom:4px;">Drill this group?</div><div class="text-muted" style="font-size:13px;">A conjugation drill drawn from these ${verbs.length} verbs.</div></div>
+      <button class="btn btn-primary" onclick="startVerbDrillForKeys([${verbs.map(([k]) => `'${jsArg(k)}'`).join(',')}])">Practice these verbs</button>
+    </div>`;
+}
+function startVerbDrillForKeys(keys) {
+  const tenses = ['presente', 'passato', 'imperfetto', 'futuro', 'condizionale'];
+  const persons = ['io', 'tu', 'lui', 'noi', 'voi', 'loro'];
+  const pool = (keys || []).filter(k => CONJUGATIONS[k]);
+  if (!pool.length) return;
+  const items = [];
+  for (let n = 0; n < 12; n++) {
+    const key = pool[Math.floor(Math.random() * pool.length)];
+    const verb = CONJUGATIONS[key];
+    const tense = tenses[Math.floor(Math.random() * tenses.length)];
+    const person = persons[Math.floor(Math.random() * persons.length)];
+    if (verb[tense] && verb[tense][person]) {
+      items.push({ verb: key, infinitive: verb.infinitive, tense, person, answer: verb[tense][person], english: verb.english });
+    }
+  }
+  STATE.verbDrill = { items, idx: 0, correct: 0, wrong: 0, mode: 'topic' };
+  STATE.view = 'verbDrill';
+  render();
 }
 
 function openVerb(key) {
@@ -16149,6 +16556,8 @@ function parseWriteReview(raw) {
     });
     if (current) review.corrections.push(current);
   }
+  review.body = sanitizeExclamations(review.body);
+  review.corrections = review.corrections.map(c => ({ ...c, corrected: sanitizeExclamations(c.corrected) }));
   return review;
 }
 
