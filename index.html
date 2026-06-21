@@ -7634,6 +7634,7 @@ const STATE = {
   books: {}, // Phase B book reading progress, keyed by chapterId
   bookVocab: {}, // new words seen in books, for later vocab merge
   customVerbs: [], // user-added verbs, hydrated into CONJUGATIONS on load
+  verbRatings: {}, // self-rated reference-only verbs (not in VOCAB), by infinitive
   lastSyncAt: null, // ms timestamp of last save (used for Settings display)
   lastDriveBackup: null, // ISO string of last successful Drive backup
   customVocabModalOpen: false,
@@ -7723,6 +7724,7 @@ async function saveState() {
     acknowledgedFirstLaunch: STATE.acknowledgedFirstLaunch,
     vocabOverrides: STATE.vocabOverrides,
     verbOverrides: STATE.verbOverrides,
+    verbRatings: STATE.verbRatings,
     claudeApiKey: STATE.claudeApiKey,
     todayProgress: STATE.todayProgress,
     lastActiveDate: STATE.lastActiveDate,
@@ -7742,6 +7744,15 @@ async function saveState() {
 
   // Also save to Supabase (plain fetch, no SDK)
   supabaseSave(payload);
+}
+// Ensure every word in VOCAB has a progress record (default = untouched). Saved
+// state can predate words added to the app; reading STATE.vocab[id] on a missing
+// word would throw. Idempotent and cheap.
+function reconcileVocabState() {
+  if (!STATE.vocab) STATE.vocab = {};
+  for (const v of VOCAB) {
+    if (!STATE.vocab[v.id]) STATE.vocab[v.id] = { fragility: 0.8, attempts: 0, correct: 0, lastSeen: null, skipped: 0 };
+  }
 }
 async function loadState() {
   console.log('loadState() starting...');
@@ -7810,6 +7821,11 @@ async function loadState() {
   hydrateVocabOverrides();
   hydrateCustomVerbs();
   hydrateVerbOverrides();
+  // Saved state from an older build can be missing words added since (and custom
+  // hydration just added more to VOCAB), so make sure every word has a progress
+  // record. Several views read STATE.vocab[id].fragility directly; without this a
+  // themed batch containing a new word throws and the page hangs on its skeleton.
+  reconcileVocabState();
   // Belt and suspenders: if the loaded state did not carry the API key (for
   // example an older synced row), restore it from the separate fallback store so
   // it never needs to be re-entered.
@@ -10856,7 +10872,7 @@ function renderVocabTheme() {
     <p class="lede">Standalone batch. Browse, listen, then practice. Independent of your course path: but everything you do here adds to your overall vocabulary map.</p>
     <div class="vocab-list">
       ${words.map(v => {
-        const f = STATE.vocab[v.id].fragility;
+        const f = (STATE.vocab[v.id] || { fragility: 0.8 }).fragility;
         const cls = f >= 0.6 ? 'weak' : f >= 0.3 ? 'fam' : 'mas';
         return `<div class="vocab-row" onclick="showDictPop(event, '${v.id}')">
           <div class="vocab-it">${v.it}<span class="vocab-pos">${v.pos}${v.gender?'·'+v.gender:''}</span></div>
@@ -16071,8 +16087,16 @@ function renderVerbCard(key, verb) {
 }
 // Verbs the learner has actually encountered (progress record), with their state.
 function knownVerbList() {
-  return VOCAB.filter(v => v.pos === 'verb' && STATE.vocab[v.id] && (v.custom || STATE.vocab[v.id].attempts > 0 || STATE.vocab[v.id].fragility !== 0.8))
+  const out = VOCAB.filter(v => v.pos === 'verb' && STATE.vocab[v.id] && (v.custom || STATE.vocab[v.id].attempts > 0 || STATE.vocab[v.id].fragility !== 0.8))
     .map(v => ({ v, sv: STATE.vocab[v.id], inf: v.it, hasTable: !!CONJUGATIONS[v.it] }));
+  // Reference-only verbs (in the table, not in VOCAB) the learner has self-rated.
+  const have = new Set(out.map(x => x.inf));
+  const ratings = STATE.verbRatings || {};
+  for (const inf of Object.keys(ratings)) {
+    if (have.has(inf) || !CONJUGATIONS[inf]) continue;
+    out.push({ v: { id: 'vbref_' + inf, it: inf, en: CONJUGATIONS[inf].english, pos: 'verb', level: '' }, sv: ratings[inf], inf, hasTable: true });
+  }
+  return out;
 }
 // Counts of encountered verbs by knowledge status (mirrors knowledgeCounts).
 function verbKnowledgeCounts() {
@@ -16225,6 +16249,33 @@ function closeVerb() {
   STATE.activeVerb = null;
   render();
 }
+// Self-rating for verbs, mirroring the Don't know / Hazy / Got it control on words.
+// VOCAB-backed verbs update their real progress record (so practice and the spaced
+// system see it). Reference-only verbs (in the table but not in VOCAB) are kept in a
+// separate verbRatings store so they never distort the vocabulary counts.
+function verbState(infinitive) {
+  const v = VOCAB.find(x => x.pos === 'verb' && x.it === infinitive);
+  if (v) return STATE.vocab[v.id] || null;
+  return (STATE.verbRatings || {})[infinitive] || null;
+}
+function rateVerb(infinitive, level) {
+  const frag = level === 'gotit' ? 0.15 : level === 'hazy' ? 0.5 : 0.85;
+  const v = VOCAB.find(x => x.pos === 'verb' && x.it === infinitive);
+  if (v) {
+    const cur = STATE.vocab[v.id] || { fragility: 0.8, attempts: 0, correct: 0, lastSeen: null, skipped: 0 };
+    cur.fragility = frag;
+    cur.attempts = Math.max(1, cur.attempts || 0);
+    if (level === 'gotit') cur.correct = Math.max(1, cur.correct || 0);
+    cur.lastSeen = Date.now();
+    STATE.vocab[v.id] = cur;
+  } else {
+    if (!STATE.verbRatings) STATE.verbRatings = {};
+    STATE.verbRatings[infinitive] = { fragility: frag, attempts: 1, lastSeen: Date.now() };
+  }
+  registerActivity();
+  saveState();
+  render();
+}
 
 function renderVerbDetail() {
   const key = STATE.activeVerb;
@@ -16255,6 +16306,19 @@ function renderVerbDetail() {
         ${verb._edited && !verb.custom ? `<button class="btn btn-sm btn-ghost" onclick="resetVerbEdit('${key}')" style="color:var(--ink-3);">↺ Reset to built-in</button>` : ''}
         ${verb.custom ? `<button class="btn btn-sm btn-ghost" onclick="deleteCustomVerb('${key}')" style="color:var(--accent);">🗑 Delete</button>` : ''}
       </div>
+      ${(() => {
+        const vks = verbState(verb.infinitive);
+        const st = (!vks || (vks.attempts === 0 && vks.fragility === 0.8)) ? null : (vks.fragility >= 0.6 ? 'weak' : vks.fragility >= 0.3 ? 'fam' : 'mas');
+        return `<div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line);">
+          <div style="font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">How well do you know this verb?</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button class="btn btn-sm ${st==='weak'?'btn-primary':'btn-ghost'}" onclick="rateVerb('${jsArg(verb.infinitive)}','dontknow')">Don't know</button>
+            <button class="btn btn-sm ${st==='fam'?'btn-primary':'btn-ghost'}" onclick="rateVerb('${jsArg(verb.infinitive)}','hazy')">Hazy</button>
+            <button class="btn btn-sm ${st==='mas'?'btn-primary':'btn-ghost'}" onclick="rateVerb('${jsArg(verb.infinitive)}','gotit')">Got it</button>
+            ${st ? `<span class="text-muted" style="font-size:12px; margin-left:4px;">Now in your verb bank as <strong>${st==='weak'?'weak':st==='fam'?'familiar':'mastered'}</strong>.</span>` : `<span class="text-muted" style="font-size:12px; margin-left:4px;">Rate it to add it to your verb bank.</span>`}
+          </div>
+        </div>`;
+      })()}
     </div>
 
     <div class="verb-tense-row">
