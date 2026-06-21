@@ -8763,6 +8763,41 @@ function courseProgress() {
   COURSE.forEach(ch => ch.lessons.forEach(l => { total++; if (STATE.course[l.id]?.completed) done++; }));
   return { total, done, pct: total ? Math.round(done/total*100) : 0 };
 }
+// Advance the course from what the learner has ACTUALLY covered, rather than only
+// when they press "Mark complete" inside a course lesson. This is what makes Today
+// and the Course move together: doing the daily flow (practising the words, viewing
+// the grammar, reading the story) ticks the matching lessons and carries the course
+// forward. Only ever marks DONE, never un-marks, and only on genuine coverage.
+//   vocab    -> every word in the lesson has been encountered (practised at least once)
+//   grammar  -> the topic has been opened
+//   story    -> the story has been read
+//   practice -> the chapter's vocab and grammar lessons are done (its synthesis)
+//   checkpoint -> every other lesson in the chapter is done
+function syncCourseProgress() {
+  let changed = false;
+  for (const ch of COURSE) {
+    for (const l of ch.lessons) {
+      if (STATE.course[l.id]?.completed) continue;
+      let done = false;
+      if (l.type === 'vocab' && Array.isArray(l.vocabIds) && l.vocabIds.length) {
+        done = l.vocabIds.every(id => { const sv = STATE.vocab[id]; return sv && (sv.attempts > 0 || sv.fragility !== 0.8); });
+      } else if (l.type === 'grammar' && l.grammarId) {
+        done = !!(STATE.grammar[l.grammarId] && STATE.grammar[l.grammarId].viewed);
+      } else if (l.type === 'story' && l.storyId) {
+        done = !!(STATE.stories[l.storyId] && STATE.stories[l.storyId].completed);
+      } else if (l.type === 'practice') {
+        const core = ch.lessons.filter(x => x.type === 'vocab' || x.type === 'grammar');
+        done = core.length > 0 && core.every(x => STATE.course[x.id]?.completed);
+      } else if (l.type === 'checkpoint') {
+        const others = ch.lessons.filter(x => x.id !== l.id);
+        done = others.length > 0 && others.every(x => STATE.course[x.id]?.completed);
+      }
+      if (done) { if (!STATE.course[l.id]) STATE.course[l.id] = {}; STATE.course[l.id].completed = true; changed = true; }
+    }
+  }
+  if (changed) saveState();
+  return changed;
+}
 
 // COURSE structure (needs to be after VOCAB ids)
 const COURSE = [
@@ -9378,6 +9413,7 @@ function render() {
   const mainEl = document.getElementById('main');
   if (mainEl && !motionReduced()) { mainEl.classList.remove('page-enter'); void mainEl.offsetWidth; mainEl.classList.add('page-enter'); }
   if (!STATE.onboarded) { STATE.onboarded = true; STATE.acknowledgedFirstLaunch = true; saveState(); return renderDashboard(); }
+  try { syncCourseProgress(); } catch (e) {}
   const v = STATE.view;
   if (v === 'dashboard') return renderDashboard();
   if (v === 'today') return renderToday();
@@ -9711,16 +9747,21 @@ function ensureTodayFresh() {
 // incomplete forever ("move forward topic to topic, never concludes"). The
 // cache locks the plan so it reflects the user's intent at the start of the
 // day. The minutes setting still triggers a rebuild when changed.
+// Bump this whenever buildTodaySession changes its STRUCTURE, so a session cached
+// under the old logic is discarded and rebuilt. v3 = teach-first sequence.
+const TODAY_SESSION_VERSION = 3;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
-  if (tp.session && tp.sessionMinutes === minutes && Array.isArray(tp.session) && tp.session.length > 0) {
+  if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
     if (tp.todayPool) STATE._todayPool = tp.todayPool;
     return tp.session;
   }
   const session = buildTodaySession(minutes);
   tp.session = session;
   tp.sessionMinutes = minutes;
+  tp.sessionVersion = TODAY_SESSION_VERSION;
   tp.todayPool = STATE._todayPool;
+  saveState();
   return session;
 }
 function isTodayStepDone(itemId) {
@@ -9779,46 +9820,52 @@ function buildTodaySession(minutes) {
     .slice(0, 6)
     .map(([id]) => id);
 
-  // ---- The day's teaching pools, all grounded in progress + the course path ----
+  // ---- The day's teaching pools: progress + the course path, NEW material first ----
   const cap = progressLevelCap();
-  // Current chapter content (the natural learning frontier).
-  const chapVocabIds = [];
+  // All course vocabulary in curriculum order, so Today teaches the next NEW words
+  // even across chapter boundaries and never gets stuck repeating one chapter.
+  const courseVocabOrder = [];
   let chapGrammarId = null;
+  COURSE.forEach(ch => ch.lessons.forEach(l => { if (l.type === 'vocab' && Array.isArray(l.vocabIds)) courseVocabOrder.push(...l.vocabIds); }));
   if (current && current.chapter) {
-    current.chapter.lessons.forEach(l => {
-      if (l.type === 'vocab' && Array.isArray(l.vocabIds)) chapVocabIds.push(...l.vocabIds);
-      if (l.type === 'grammar' && l.grammarId && !chapGrammarId) chapGrammarId = l.grammarId;
-    });
+    current.chapter.lessons.forEach(l => { if (l.type === 'grammar' && l.grammarId && !chapGrammarId) chapGrammarId = l.grammarId; });
   }
-  // helper: is a vocab id a real, in-scope word
   const realInScope = (id) => { const v = VOCAB.find(x => x.id === id); return v && isAtOrBelowLevel(v.level, cap); };
-  // Words from the current chapter not yet mastered (fragility >= 0.3 or untouched).
-  const chapToLearn = chapVocabIds.filter(id => realInScope(id)).filter(id => {
-    const sv = STATE.vocab[id];
-    return !sv || sv.fragility >= 0.3;
-  });
-  // Vocab of the day: chapter words to learn first, then weak words, then due words.
-  // All come from the course path or the progress record.
-  let dayVocabIds = [...new Set([...chapToLearn, ...weakIds, ...dueIds])].filter(realInScope).slice(0, 6);
+  const isUntouched = (id) => { const sv = STATE.vocab[id]; return !sv || (sv.attempts === 0 && sv.fragility === 0.8); };
+  // New words = the next untouched words along the curriculum (the teaching frontier).
+  const newVocab = courseVocabOrder.filter(id => realInScope(id) && isUntouched(id));
+  // Day's words: a few new ones to learn, then weak and due ones to reinforce.
+  let dayVocabIds = [...new Set([...newVocab.slice(0, 4), ...weakIds, ...dueIds, ...newVocab.slice(4)])].filter(realInScope).slice(0, 6);
   if (dayVocabIds.length < 4) {
-    // Top up from any encountered words, weakest first (still progress-grounded).
     const extra = candidates.map(c => c.id).filter(id => !dayVocabIds.includes(id) && realInScope(id));
-    dayVocabIds = [...dayVocabIds, ...extra].slice(0, 6);
+    dayVocabIds = [...new Set([...dayVocabIds, ...extra])].slice(0, 6);
   }
-  // Verbs of the day: weak/encountered verbs first (progress), plus current-chapter
-  // verbs, restricted to verbs that have a conjugation table to teach.
+  // Verbs of the day: next untouched verbs along the curriculum, then weak verbs.
   const isConjVerb = (id) => { const v = VOCAB.find(x => x.id === id); return v && v.pos === 'verb' && CONJUGATIONS[v.it]; };
   const verbToInf = (id) => { const v = VOCAB.find(x => x.id === id); return v ? v.it : null; };
-  const chapVerbInfs = chapVocabIds.filter(isConjVerb).map(verbToInf);
+  const newVerbInfs = courseVocabOrder.filter(id => isConjVerb(id) && isUntouched(id)).map(verbToInf);
   const weakVerbInfs = candidates.map(c => c.id).filter(isConjVerb).map(verbToInf);
-  let dayVerbKeys = [...new Set([...chapVerbInfs, ...weakVerbInfs])].filter(Boolean).slice(0, 2);
+  let dayVerbKeys = [...new Set([...newVerbInfs, ...weakVerbInfs])].filter(Boolean).slice(0, 2);
   if (dayVerbKeys.length === 0) dayVerbKeys = ['essere', 'avere'].filter(k => CONJUGATIONS[k]);
-  // Grammar of the day: the current chapter's grammar point.
-  const dayGrammarId = (chapGrammarId && typeof GRAMMAR !== 'undefined' && GRAMMAR[chapGrammarId]) ? chapGrammarId : null;
+  // Grammar of the day: the current chapter's grammar if not yet opened, else the
+  // next grammar topic in order the learner has not viewed (so grammar progresses).
+  let dayGrammarId = null;
+  if (typeof GRAMMAR !== 'undefined') {
+    const unviewed = (gid) => gid && GRAMMAR[gid] && !(STATE.grammar[gid] && STATE.grammar[gid].viewed);
+    if (unviewed(chapGrammarId)) dayGrammarId = chapGrammarId;
+    else dayGrammarId = (GRAMMAR_ORDER || []).find(unviewed) || chapGrammarId || null;
+  }
   // Closing review pool: today's new words mixed with the weakest ones.
   const reviewIds = [...new Set([...weakIds, ...dayVocabIds])].filter(realInScope).slice(0, 8);
-  // The vocab ids backing the day's verbs, so practice can include them.
   const dayVerbVocabIds = dayVerbKeys.map(inf => { const v = VOCAB.find(x => x.pos === 'verb' && x.it === inf); return v ? v.id : null; }).filter(Boolean);
+  // Reading: prefer the current chapter's own (unread) story, so reading it in the
+  // flow ticks the course story lesson. The story reader (kind 'story') has no
+  // practice gate, so it never shows the "complete practice first" wall.
+  let chapStoryId = null;
+  if (current && current.chapter) {
+    const sl = current.chapter.lessons.find(l => l.type === 'story' && l.storyId && !STATE.stories[l.storyId]?.completed);
+    if (sl) chapStoryId = sl.storyId;
+  }
 
   // ===================== THE TEACH-FIRST SEQUENCE =====================
   // Steps 1-4 are the core and always present. Step 5 (read) needs 30+ minutes,
@@ -9838,10 +9885,12 @@ function buildTodaySession(minutes) {
   }
   // 4. Practice (core) over today's words and verbs
   s.push({ id: 'today_practice', kind: 'practice', refId: 'day_practice', icon: 'P', title: 'Practice', sub: "Drills on today's words and verbs", mins: 8 });
-  // 5. Read a level-appropriate story (no duplicate, never above level)
+  // 5. Read a level-appropriate story (chapter's own first, else a standalone one)
   if (minutes >= 30) {
-    const unread = STORIES.find(st => !st.locked && !STATE.stories[st.id]?.completed && st.type !== 'magazine' && isAtOrBelowLevel(st.level, cap));
-    if (unread) s.push({ id: `today_story_${unread.id}`, kind: 'story', refId: unread.id, icon: 'S', title: unread.title, sub: `Read · ${unread.italian}`, mins: unread.mins || 6 });
+    let story = null;
+    if (chapStoryId) story = STORIES.find(st => st.id === chapStoryId && isAtOrBelowLevel(st.level, cap));
+    if (!story) story = STORIES.find(st => !st.locked && !STATE.stories[st.id]?.completed && st.type !== 'magazine' && isAtOrBelowLevel(st.level, cap));
+    if (story) s.push({ id: `today_story_${story.id}`, kind: 'story', refId: story.id, icon: 'S', title: story.title, sub: `Read · ${story.italian}`, mins: story.mins || 6 });
   }
   // 6. Mixed review: today's new words mixed with weak ones
   if (minutes >= 45 && reviewIds.length > 0) {
@@ -13311,6 +13360,16 @@ function readWholeStory(sid) {
   const fullText = s.body.map(p => p.it).join(' ');
   speak(fullText);
 }
+// Speak a Conversa line with the correct voice, chosen at click time. Avoids
+// embedding a JSON options object in the onclick attribute (the quotes in the
+// JSON broke the attribute and stopped the play buttons from firing). who is
+// 'them' (scenario speaker's gendered voice) or 'me' (the learner, male).
+function cvSpeak(text, who, slow) {
+  const sid = STATE.chatScenarioId || 'sc_maria_arrival';
+  let opts = (who === 'me') ? myVoiceOpts() : conversaVoiceOpts(sid);
+  if (slow) opts = Object.assign({ rate: 0.65 }, opts);
+  speak(text, opts);
+}
 // Play the entire Conversa exchange as a two-sided dialogue: each "them" line in
 // the speaker's gendered voice, each "me" line in a male voice. Acts as a toggle:
 // tapping again stops playback. Sequential, so lines never overlap.
@@ -15491,16 +15550,6 @@ function renderConversa() {
   }
   const activeId = STATE.chatScenarioId || 'sc_maria_arrival';
   const scenario = CONVERSA_SCENARIOS.find(s => s.id === activeId) || CONVERSA_SCENARIOS[0];
-  // Gendered voice options for this scenario, embedded into the play buttons so a
-  // male character is read in a male voice (and vice versa).
-  const _vg = CONVERSA_GENDER[scenario.id];
-  const _vOpts = _vg ? { voice: genderedNeuralVoice(_vg), voiceGender: _vg } : {};
-  const vJson = JSON.stringify(_vOpts);
-  const vJsonSlow = JSON.stringify(Object.assign({ rate: 0.65 }, _vOpts));
-  // The learner's own lines and answer options are read in a male voice.
-  const _myOpts = { voice: genderedNeuralVoice('male'), voiceGender: 'male' };
-  const myJson = JSON.stringify(_myOpts);
-  const myJsonSlow = JSON.stringify(Object.assign({ rate: 0.65 }, _myOpts));
   if (!STATE.chat || STATE.chat.length === 0) {
     STATE.chat = [{ from: 'them', it: scenario.greeting.it, en: scenario.greeting.en }];
     STATE.chatSuggestions = null;
@@ -15555,11 +15604,11 @@ function renderConversa() {
         <div class="chat-body" id="chat-body">
           ${STATE.chat.map((m, i) => `<div class="bubble-row ${m.from}">
             ${m.from === 'them' ? `<div class="bubble-audio-stack">
-              <button class="btn-icon-audio bubble-audio" onclick="speak('${jsArg(m.it)}', ${vJson})" title="Play">▸</button>
-              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="speak('${jsArg(m.it)}', ${vJsonSlow})" title="Slow replay">🐢</button>
+              <button class="btn-icon-audio bubble-audio" onclick="cvSpeak('${jsArg(m.it)}','them')" title="Play">▸</button>
+              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="cvSpeak('${jsArg(m.it)}','them',true)" title="Slow replay">🐢</button>
             </div>` : `<div class="bubble-audio-stack">
-              <button class="btn-icon-audio bubble-audio" onclick="speak('${jsArg(m.it)}', ${myJson})" title="Play (your line)">▸</button>
-              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="speak('${jsArg(m.it)}', ${myJsonSlow})" title="Slow replay">🐢</button>
+              <button class="btn-icon-audio bubble-audio" onclick="cvSpeak('${jsArg(m.it)}','me')" title="Play (your line)">▸</button>
+              <button class="btn-icon-audio bubble-audio bubble-audio-slow" onclick="cvSpeak('${jsArg(m.it)}','me',true)" title="Slow replay">🐢</button>
             </div>`}
             <div class="bubble ${m.from}">
               ${htmlText(m.it)}
@@ -15576,7 +15625,7 @@ function renderConversa() {
               <span class="chat-suggest-it">${htmlText(c.it)}</span>
               ${c.en ? `<span class="chat-suggest-en">${htmlText(c.en)}</span>` : ''}
             </button>
-            <button class="chat-suggest-practice" onclick="speak('${jsArg(c.it)}', ${myJson})" title="Hear this option">▸</button>
+            <button class="chat-suggest-practice" onclick="cvSpeak('${jsArg(c.it)}','me')" title="Hear this option">▸</button>
             <button class="chat-suggest-practice" onclick="openPronunciationDrill('${jsArg(c.it)}')" title="Practice saying this aloud">🎤</button>
           </div>`;
           }).join('')}
