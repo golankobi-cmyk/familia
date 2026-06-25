@@ -1,6 +1,10 @@
-// Famiglia service worker (OPEN-8). Caches the app shell for offline use and
-// runtime-caches Google Fonts. Bump CACHE to invalidate after a deploy.
-const CACHE = 'famiglia-v1';
+// Famiglia service worker. The app shell (index.html) is served NETWORK FIRST,
+// so a fresh deploy is picked up immediately whenever the device is online. The
+// cache becomes a pure offline fallback. Other same-origin assets are served
+// stale-while-revalidate: cache for speed, refreshed in the background. Because
+// of this, CACHE no longer needs bumping on every deploy. Bump it only when you
+// want to force a clean wipe of all previously cached assets.
+const CACHE = 'famiglia-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-512-maskable.png'];
 
 self.addEventListener('install', (e) => {
@@ -22,24 +26,33 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // App navigations: serve the cached shell, fall back to network.
-  if (req.mode === 'navigate') {
+  // App navigations and the HTML shell: NETWORK FIRST. Always try the network so
+  // the newest deployed index.html wins; fall back to cache only when offline.
+  const isShell = req.mode === 'navigate' ||
+    (url.origin === self.location.origin && (url.pathname.endsWith('/') || url.pathname.endsWith('/index.html')));
+  if (isShell) {
     e.respondWith(
-      caches.match('./index.html').then((r) => r || fetch(req).catch(() => caches.match('./')))
+      fetch(req).then((resp) => {
+        const copy = resp.clone();
+        caches.open(CACHE).then((c) => c.put('./index.html', copy)).catch(() => {});
+        return resp;
+      }).catch(() => caches.match('./index.html').then((r) => r || caches.match('./')))
     );
     return;
   }
 
-  // Same-origin assets: cache first, then network (and cache the result).
+  // Same-origin assets: stale-while-revalidate. Serve cache immediately, fetch a
+  // fresh copy in the background and update the cache for next time.
   if (url.origin === self.location.origin) {
     e.respondWith(
-      caches.match(req).then((r) =>
-        r || fetch(req).then((resp) => {
+      caches.match(req).then((cached) => {
+        const network = fetch(req).then((resp) => {
           const copy = resp.clone();
           caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           return resp;
-        }).catch(() => caches.match('./index.html'))
-      )
+        }).catch(() => cached);
+        return cached || network;
+      })
     );
     return;
   }

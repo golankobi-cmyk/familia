@@ -7703,6 +7703,17 @@ function toggleDevMode() {
   render();
 }
 
+// SECURITY: secrets (the Anthropic API key and the Google TTS key) must never
+// leave this device. They stay in localStorage only. Anything persisted off the
+// device (Supabase sync, Google Drive backup, the downloadable export file) is run
+// through this first, which removes both. A real billable key must never sit in a
+// cloud row or a shared file.
+function stripSecrets(payload) {
+  const out = Object.assign({}, payload);
+  delete out.claudeApiKey;
+  if (out.settings) out.settings = Object.assign({}, out.settings, { googleTtsKey: '' });
+  return out;
+}
 async function saveState() {
   console.log('saveState() called');
   STATE.lastSyncAt = Date.now();
@@ -7742,8 +7753,9 @@ async function saveState() {
     console.error('✗ localStorage error:', e.message);
   }
 
-  // Also save to Supabase (plain fetch, no SDK)
-  supabaseSave(payload);
+  // Also save to Supabase (plain fetch, no SDK). Secrets are stripped here: the
+  // Anthropic key and Google TTS key stay on this device, never in the cloud row.
+  supabaseSave(stripSecrets(payload));
 }
 // Ensure every word in VOCAB has a progress record (default = untouched). Saved
 // state can predate words added to the app; reading STATE.vocab[id] on a missing
@@ -7775,8 +7787,10 @@ async function loadState() {
     console.log('Supabase unavailable:', e.message);
   }
 
-  const remoteValid = remote && remote.payload &&
-    (remote.payload.claudeApiKey || (remote.payload.course && Object.keys(remote.payload.course).length > 0));
+  const remoteValid = remote && remote.payload && (
+    (remote.payload.course && Object.keys(remote.payload.course).length > 0) ||
+    (remote.payload.vocab && Object.keys(remote.payload.vocab).length > 0) ||
+    remote.payload.onboarded === true);
 
   if (remoteValid) {
     // Prefer whichever is newer. Remote freshness = row.updated_at;
@@ -7832,6 +7846,14 @@ async function loadState() {
   if (!STATE.claudeApiKey) {
     try { const k = localStorage.getItem('famiglia_api_key'); if (k) STATE.claudeApiKey = k; } catch(e) {}
   }
+  // The Google TTS key is now device-local too. A secret-free synced row carries a
+  // blank key, so if the merge left it empty, restore it from the full local save.
+  try {
+    if (STATE.settings && !((STATE.settings.googleTtsKey || '').trim())) {
+      const localTts = localPayload && localPayload.settings && localPayload.settings.googleTtsKey;
+      if (localTts) STATE.settings.googleTtsKey = localTts;
+    }
+  } catch(e) {}
   console.log('loadState() complete. Loaded:', loaded);
   return loaded;
 }
@@ -7965,7 +7987,7 @@ function uiAlert(message) {
     const wrap = document.createElement('div');
     wrap.className = 'ui-dialog-backdrop';
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.52);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;';
-    const safe = String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    const safe = escapeHtml(message).replace(/\n/g,'<br>');
     wrap.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--line);max-width:460px;width:100%;border-radius:16px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.30);">
       <div style="font-size:15px;line-height:1.55;color:var(--ink);margin-bottom:20px;">${safe}</div>
       <div style="display:flex;justify-content:flex-end;"><button class="btn btn-primary" id="ui-ok">OK</button></div>
@@ -7982,7 +8004,7 @@ function uiConfirm(message) {
     const wrap = document.createElement('div');
     wrap.className = 'ui-dialog-backdrop';
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.52);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;';
-    const safe = String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    const safe = escapeHtml(message).replace(/\n/g,'<br>');
     wrap.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--line);max-width:460px;width:100%;border-radius:16px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.30);">
       <div style="font-size:15px;line-height:1.55;color:var(--ink);margin-bottom:20px;">${safe}</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;"><button class="btn btn-ghost" id="ui-cancel">Cancel</button><button class="btn btn-primary" id="ui-ok">OK</button></div>
@@ -8002,8 +8024,8 @@ function uiPrompt(message, defaultValue, opts) {
     const wrap = document.createElement('div');
     wrap.className = 'ui-dialog-backdrop';
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.52);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;';
-    const safe = String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
-    const safeDefault = String(defaultValue || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const safe = escapeHtml(message).replace(/\n/g,'<br>');
+    const safeDefault = escapeHtml(defaultValue);
     const inputType = opts.password ? 'password' : 'text';
     wrap.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--line);max-width:520px;width:100%;border-radius:16px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.30);">
       <div style="font-size:15px;line-height:1.55;color:var(--ink);margin-bottom:14px;">${safe}</div>
@@ -8052,7 +8074,7 @@ function renderCustomVocabModal() {
     document.body.appendChild(modal);
   }
   const d = STATE.customVocabDraft;
-  const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const esc = escapeHtml;
   modal.innerHTML = `
     <div class="pron-modal" style="max-width:480px;">
       <div class="pron-modal-hd">
@@ -8282,7 +8304,7 @@ function renderCustomVerbModal() {
     document.body.appendChild(modal);
   }
   const d = STATE.customVerbDraft;
-  const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const esc = escapeHtml;
   const inf = (d.infinitive || '').toLowerCase().trim();
   let detectedGroup = null;
   if (inf.endsWith('are')) detectedGroup = '-are';
@@ -8468,7 +8490,7 @@ function renderVerbEditModal() {
   }
   const d = STATE.verbEditDraft;
   const v = CONJUGATIONS[d.key];
-  const esc = (s) => (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const esc = escapeHtml;
   const tenseLabel = { presente: 'Presente', passato: 'Passato prossimo', imperfetto: 'Imperfetto', futuro: 'Futuro', condizionale: 'Condizionale', imperativo: 'Imperativo' }[d.tense] || d.tense;
   const personLabels = { io: 'io', tu: 'tu', lui: 'lui / lei', noi: 'noi', voi: 'voi', loro: 'loro' };
   const formKeys = Object.keys(d.forms);
@@ -8611,7 +8633,7 @@ function exportBackup() {
     acknowledgedFirstLaunch: STATE.acknowledgedFirstLaunch, lastSyncAt: STATE.lastSyncAt,
     claudeApiKey: STATE.claudeApiKey
   };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(stripSecrets(payload), null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const date = new Date().toISOString().slice(0,10);
@@ -8651,7 +8673,7 @@ async function saveToDrive() {
     acknowledgedFirstLaunch: STATE.acknowledgedFirstLaunch, lastSyncAt: STATE.lastSyncAt,
     claudeApiKey: STATE.claudeApiKey
   };
-  const payloadStr = JSON.stringify(payload, null, 2);
+  const payloadStr = JSON.stringify(stripSecrets(payload), null, 2);
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -8702,7 +8724,7 @@ function importBackup() {
           const ok1 = await uiConfirm('This backup is from a different app version. Restore anyway?');
           if (!ok1) return;
         }
-        const ok2 = await uiConfirm('Restore from this backup? This will replace your current progress, learned vocabulary, streak, custom words, chat history, and saved API key with the contents of the file. This cannot be undone.');
+        const ok2 = await uiConfirm('Restore from this backup? This will replace your current progress, learned vocabulary, streak, custom words, and chat history with the contents of the file. This cannot be undone. Your API keys are not stored in backups, so you may need to re-enter them after restoring.');
         if (!ok2) return;
         const keys = ['vocab','grammar','course','stories','sicilian','settings','onboarded','streak','chat','mistakes','writeDrafts','customVocab','customVerbs','lastSyncAt','vocabOverrides','verbOverrides','todayProgress','lastActiveDate','acknowledgedFirstLaunch','claudeApiKey','books','bookVocab','chatSuggestions','lastDriveBackup'];
         keys.forEach(k => { if (k in data) STATE[k] = data[k]; });
@@ -13181,7 +13203,7 @@ function renderBookChapter() {
     const enBlock = en ? `<div class="book-para-en">${en}</div>` : '';
     const _turns = splitDialogueTurns(p);
     const pHtml = _turns.length > 1 ? _turns.map(t => `<span class="dlg-line">${t}</span>`).join('') : p;
-    return `<div class="book-para-block"><p class="book-para"><button class="book-para-audio" title="Listen" onclick="speak(this.getAttribute('data-t'),{})" data-t="${p.replace(/"/g, '&quot;')}">\u25b6</button>${pHtml}${trBtn}</p>${enBlock}</div>`;
+    return `<div class="book-para-block"><p class="book-para"><button class="book-para-audio" title="Listen" onclick="speak(this.getAttribute('data-t'),{})" data-t="${escapeHtml(p)}">\u25b6</button>${pHtml}${trBtn}</p>${enBlock}</div>`;
   }).join('');
   const vocabRows = chapter.vocabulary.map(w =>
     `<div class="book-vocab-row"><button class="book-vocab-audio" onclick="speak('${w.italian.replace(/'/g, "\\'")}',{})">\u25b6</button><span class="book-vocab-it">${w.italian}</span><span class="book-vocab-en">${w.english}</span></div>`).join('');
@@ -14892,7 +14914,7 @@ function renderExercise() {
       let control;
       if (b.mode === 'select' && b.options) {
         const opts = `<option value="">(${b.en})</option>` + b.options.map(o => {
-          const safe = String(o).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const safe = escapeHtml(o);
           return `<option value="${safe}">${safe}</option>`;
         }).join('');
         control = `<select class="pf-input pf-select" id="pf-input-${idx}" data-idx="${idx}" style="${baseStyle} cursor:pointer;">${opts}</select>`;
@@ -15698,8 +15720,20 @@ function jsArg(s) {
     .replace(/>/g, '&gt;')
     .replace(/\r?\n/g, ' ');
 }
+// Canonical HTML escaper. One source of truth for turning any dynamic string
+// into safe HTML, for both text content and quoted attribute values. Escapes
+// the five characters that can break out of either context. Ampersand is
+// replaced first so the entities added afterward are not themselves re-escaped.
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 function htmlText(s) {
-  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return escapeHtml(s);
 }
 async function openApiKeyModal() {
   const current = STATE.claudeApiKey || '';
@@ -15948,7 +15982,7 @@ function showHeardBanner(transcript) {
   banner.className = 'heard-banner';
   banner.innerHTML = `
     <span class="heard-label">Heard:</span>
-    <span class="heard-text">"${transcript.replace(/"/g, '&quot;')}"</span>
+    <span class="heard-text">"${escapeHtml(transcript)}"</span>
     <span class="heard-hint">Edit if wrong, then send.</span>
     <button class="heard-close" onclick="this.parentElement.remove()" title="Close">×</button>
   `;
@@ -17118,7 +17152,7 @@ function renderSettingsAudio() {
       <div class="settings-row" style="display:block;">
         <div class="settings-row-label" style="margin-bottom:6px;">Google Text-to-Speech key</div>
         <div class="key-field">
-          <input id="tts-key-input" class="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${(STATE.settings.googleTtsKey||'').replace(/"/g,'&quot;')}" placeholder="Paste your Google TTS key" oninput="onTtsKeyInput(this.value)" onchange="commitTtsKey()" />
+          <input id="tts-key-input" class="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(STATE.settings.googleTtsKey)}" placeholder="Paste your Google TTS key" oninput="onTtsKeyInput(this.value)" onchange="commitTtsKey()" />
           <span id="tts-key-status" class="key-status ${(STATE.settings.googleTtsKey||'').trim()?'ok':''}">${(STATE.settings.googleTtsKey||'').trim() ? '✓ saved' : ''}</span>
         </div>
         <div class="settings-row-desc">Saved on this device and synced to your other devices, so you enter it once.</div>
@@ -17170,7 +17204,7 @@ function renderSettingsAccount() {
       <div class="settings-row" style="display:block;">
         <div class="settings-row-label" style="margin-bottom:6px;">Anthropic API key ${apiKeySet ? '<span class="key-status ok" style="margin-left:6px;">✓ active</span>' : ''}</div>
         <div class="key-field">
-          <input id="claude-key-input" class="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${(STATE.claudeApiKey||'').replace(/"/g,'&quot;')}" placeholder="sk-ant-..." oninput="onClaudeKeyInput(this.value)" onchange="commitClaudeKey()" />
+          <input id="claude-key-input" class="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(STATE.claudeApiKey)}" placeholder="sk-ant-..." oninput="onClaudeKeyInput(this.value)" onchange="commitClaudeKey()" />
           <span id="claude-key-status" class="key-status ${apiKeySet?'ok':''}">${apiKeySet ? '✓ active' : ''}</span>
         </div>
         <div class="settings-row-desc">Your own Anthropic key powers live Conversa chat and writing feedback. It saves as you type, stays on this device, and syncs to your other devices. Get one at console.anthropic.com.</div>
@@ -17497,7 +17531,7 @@ try {
           max_tokens: 1024,
           mcp_servers: [{ type: 'url', url: 'https://drivemcp.googleapis.com/mcp/v1', name: 'google-drive' }],
           system: 'You are a file-saving assistant. The user will give you a filename, a folder ID, and file content. Use the Google Drive tool to create that file in that folder with that content. Respond with only: SAVED or FAILED and the reason.',
-          messages: [{ role: 'user', content: `Save a file to Google Drive.\nFolder ID: ${DRIVE_BACKUP_FOLDER_ID}\nFilename: ${filename}\nContent (JSON):\n${JSON.stringify(payload, null, 2)}` }]
+          messages: [{ role: 'user', content: `Save a file to Google Drive.\nFolder ID: ${DRIVE_BACKUP_FOLDER_ID}\nFilename: ${filename}\nContent (JSON):\n${JSON.stringify(stripSecrets(payload), null, 2)}` }]
         })
       });
       if (response.ok) {
