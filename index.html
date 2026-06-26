@@ -9851,8 +9851,9 @@ const COURSE_GRAMMAR_ORDER = (function () {
 // Bump this whenever buildTodaySession changes its STRUCTURE or its word-selection
 // logic, so a session cached under the old logic is discarded and rebuilt.
 // v4 = teach-first + speak step; v5 = adult-life breadth frontier (Build 2 / A25);
-// v6 = grammar production step + course-order grammar frontier (Build 3 / A26).
-const TODAY_SESSION_VERSION = 6;
+// v6 = grammar production step + course-order grammar frontier (Build 3 / A26);
+// v7 = post-Chapter-14 maintenance-mode session (A27).
+const TODAY_SESSION_VERSION = 7;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
   if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
@@ -9982,6 +9983,54 @@ function buildTodaySession(minutes) {
     if (sl) chapStoryId = sl.storyId;
   }
 
+  // ===================== MAINTENANCE MODE (A27) =====================
+  // After Chapter 14 the course is complete (getCurrentLesson() is null). Today
+  // shifts to a steady rhythm instead of the in-course teach sequence. It still
+  // TEACHES remaining new material, because most of the 478-word adult-life breadth
+  // frontier unlocks past the course (the course ceilings at A2.2; breadth climbs
+  // the userLevelCap ladder beyond it), and any course grammar not yet drilled is
+  // finished here too. Then the review-input-production loop the maintenance copy
+  // promises: weakest words, words due for spaced review, speak, a story, and
+  // Parlare. No course-filler verb step, no generic "today's words" practice, no
+  // duplicate mixed review. When all breadth is taught and all grammar drilled,
+  // steps a and b drop out on their own and the day becomes pure maintenance.
+  if (courseComplete()) {
+    const newBreadth = dayVocabIds.filter(isUntouched);
+    // a. Remaining new adult-life vocabulary, only while genuinely new words remain.
+    if (newBreadth.length > 0) {
+      s.push({ id: 'teach_vocab', kind: 'teachVocab', refId: 'day_vocab', icon: 'V', title: 'Vocabolario del giorno', sub: `${dayVocabIds.length} words: new adult-life vocabulary and review`, mins: 5 });
+    }
+    // b. Remaining grammar to read and produce, while any course topic is unviewed.
+    if (dayGrammarId) {
+      s.push({ id: `teach_grammar_${dayGrammarId}`, kind: 'teachGrammar', refId: dayGrammarId, icon: 'G', title: GRAMMAR[dayGrammarId].title, sub: 'The grammar focus, explained', mins: 4 });
+      if (typeof GRAMMAR_EX !== 'undefined' && GRAMMAR_EX[dayGrammarId]) {
+        s.push({ id: 'today_grammar_practice', kind: 'practice', refId: 'day_grammar', icon: 'G', title: 'Grammar drill', sub: `Produce it: ${GRAMMAR[dayGrammarId].title}`, mins: 5 });
+      }
+    }
+    // c. Your weakest words: the spaced-review core.
+    if (weakIds.length > 0) {
+      s.push({ id: 'today_weak', kind: 'practice', refId: 'weak_review', icon: 'R', title: 'Your weakest words', sub: `${weakIds.length} word${weakIds.length===1?'':'s'} your progress flags as weak`, mins: 6 });
+    }
+    // d. Due for spaced review: the SRS resurfacing just before you would forget.
+    if (dueIds.length > 0) {
+      s.push({ id: 'today_due', kind: 'practice', refId: 'srs_due', icon: 'D', title: 'Due for review', sub: `${dueIds.length} word${dueIds.length===1?'':'s'} coming back just in time`, mins: 5 });
+    }
+    // e. Speak: produce the day's words aloud. Daily production never stops.
+    if (dayVocabIds.length > 0) {
+      s.push({ id: 'today_speak', kind: 'speak', refId: 'day_speak', icon: '🎤', title: 'Parla', sub: 'Say your words and sentences aloud', mins: 5 });
+    }
+    // f. Comprehensible input: the next unread, level-appropriate story (20+ min).
+    //    Books stay available any time in the Books tab.
+    if (minutes >= 20) {
+      const story = STORIES.find(st => !st.locked && !STATE.stories[st.id]?.completed && st.type !== 'magazine' && isAtOrBelowLevel(st.level, cap));
+      if (story) s.push({ id: `today_story_${story.id}`, kind: 'story', refId: story.id, icon: 'S', title: story.title, sub: `Read \u00b7 ${story.italian}`, mins: story.mins || 6 });
+    }
+    // g. Parlare: open production, the learner's own words.
+    s.push({ id: 'today_parlare', kind: 'parlare', refId: 'parlare', icon: 'W', title: 'Parlare', sub: 'Write or speak something of your own', mins: 6 });
+    STATE._todayPool = { weakIds, dueIds, dayVocabIds, dayVerbKeys, dayVerbVocabIds, dayGrammarId, reviewIds };
+    return s;
+  }
+
   // ===================== THE TEACH-FIRST SEQUENCE =====================
   // Steps 1-4 are the core and always present. Step 5 (read) needs 30+ minutes,
   // step 6 (mixed review) needs 45+. Every step returns to this flow on finish.
@@ -10049,8 +10098,8 @@ function renderToday() {
   main.innerHTML = `
     <div class="eyebrow">Today · ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}${maint ? ' · Maintenance mode' : ''}</div>
     <h1 class="h1">${target} minutes, built for you.</h1>
-    ${maint ? `<div class="card" style="max-width:720px; margin:0 0 18px; border-color:var(--leaf-border); background:var(--leaf-wash);"><div class="eyebrow" style="color:var(--leaf-text);">Course complete</div><div style="font-size:14px; color:var(--ink-2); margin-top:6px;">You have finished all 14 chapters. Today is now a maintenance rhythm: your weakest words and spaced review, plus stories, books and Parlare to keep everything alive.</div></div>` : ''}
-    <p class="lede">${maint ? 'A review sequence drawn from your weakest words, words due for spaced review, and comprehensible input from stories and books. Follow it in order, then write something in Parlare.' : 'First you learn: the day\'s words and verbs, then the grammar focus. Then you practise them, read something at your level, and finish with a mixed review. Follow it in order, each step feeds the next.'}</p>
+    ${maint ? `<div class="card" style="max-width:720px; margin:0 0 18px; border-color:var(--leaf-border); background:var(--leaf-wash);"><div class="eyebrow" style="color:var(--leaf-text);">Course complete</div><div style="font-size:14px; color:var(--ink-2); margin-top:6px;">You have finished all 14 chapters. Today is now a maintenance rhythm: any adult-life vocabulary and grammar you have not yet covered, your weakest words and words due for review, a story, and Parlare. Books stay available any time in the Books tab.</div></div>` : ''}
+    <p class="lede">${maint ? 'New adult-life words and grammar while any remain, then your weakest words, words due for spaced review, a story to read, and Parlare to produce your own. Follow it in order.' : 'First you learn: the day\'s words and verbs, then the grammar focus. Then you practise them, read something at your level, and finish with a mixed review. Follow it in order, each step feeds the next.'}</p>
     <div style="max-width:720px; margin-bottom:14px;">
       <div class="text-muted" style="font-size:12.5px;">${maint ? '' : 'Your words and verbs today come from your current chapter and from what your progress marks as weak or due, never random.'}</div>
     </div>
