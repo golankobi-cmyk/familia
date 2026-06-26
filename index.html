@@ -1488,7 +1488,7 @@ async function supabaseLoad() {
     }
     return null;
   } catch(e) {
-    if (!/failed to fetch|networkerror|load failed|err_/i.test(String(e && e.message || ''))) console.warn('Supabase load failed:', e.message);
+    console.warn('Supabase load failed:', e.message);
     return null;
   }
 }
@@ -1512,7 +1512,7 @@ async function supabaseSave(payload) {
     console.log('✓ Saved to Supabase');
     return true;
   } catch(e) {
-    if (!/failed to fetch|networkerror|load failed|err_/i.test(String(e && e.message || ''))) console.warn('Supabase save failed:', e.message);
+    console.warn('Supabase save failed:', e.message);
     return false;
   }
 }
@@ -7868,10 +7868,35 @@ async function loadLatestDriveBackup() {
     // We store the key separately so it survives even when the main state is wiped
     try { apiKey = localStorage.getItem('famiglia_api_key'); } catch(e) {}
   }
-  // No key available: do not block the boot with a modal. A brand-new user has no
-  // backup to restore, so the caller treats a null return as "start fresh" and boots
-  // straight to the dashboard. A user who genuinely lost data can restore from a
-  // backup file in Settings, or re-enter their key there to pull a Drive backup.
+  if (!apiKey) {
+    // Last resort: ask. This only happens in the rare double-failure scenario.
+    apiKey = await new Promise(resolve => {
+      const backdrop = document.createElement('div');
+      backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(20,14,8,0.6);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+      backdrop.innerHTML = `
+        <div style="background:var(--bg-card);border-radius:18px;padding:28px;max-width:460px;width:100%;display:flex;flex-direction:column;gap:16px;">
+          <div style="font-family:var(--display);font-size:18px;font-weight:600;color:var(--ink);">Restore from Google Drive</div>
+          <p style="font-size:13.5px;color:var(--ink-2);line-height:1.6;">Your local data was cleared. Enter your Claude API key to automatically restore your latest backup from Google Drive.</p>
+          <input id="restore-key-input" type="password" placeholder="sk-ant-..." style="padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:14px;background:var(--bg-card);color:var(--ink);outline:none;width:100%;" />
+          <div style="display:flex;gap:10px;">
+            <button onclick="document.getElementById('restore-key-resolve').click()" style="flex:1;padding:12px;background:var(--accent);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;">Restore</button>
+            <button onclick="document.getElementById('restore-key-cancel').click()" style="flex:1;padding:12px;background:var(--bg-2);color:var(--ink-2);border:none;border-radius:10px;font-size:14px;cursor:pointer;">Start fresh</button>
+          </div>
+          <button id="restore-key-resolve" style="display:none;"></button>
+          <button id="restore-key-cancel" style="display:none;"></button>
+        </div>`;
+      document.body.appendChild(backdrop);
+      backdrop.querySelector('#restore-key-resolve').addEventListener('click', () => {
+        const val = backdrop.querySelector('#restore-key-input').value.trim();
+        document.body.removeChild(backdrop);
+        resolve(val || null);
+      });
+      backdrop.querySelector('#restore-key-cancel').addEventListener('click', () => {
+        document.body.removeChild(backdrop);
+        resolve(null);
+      });
+    });
+  }
   if (!apiKey) return null;
 
   try {
@@ -9433,6 +9458,7 @@ function render() {
   if (v === 'todayTeachVocab') return renderTodayTeachVocab();
   if (v === 'todayTeachVerbs') return renderTodayTeachVerbs();
   if (v === 'todayTeachGrammar') return renderTodayTeachGrammar();
+  if (v === 'todaySpeak') return renderTodaySpeak();
   if (v === 'course') return renderCourse();
   if (v === 'lesson') return renderLesson();
   if (v === 'grammar') return renderGrammar();
@@ -9760,9 +9786,56 @@ function ensureTodayFresh() {
 // incomplete forever ("move forward topic to topic, never concludes"). The
 // cache locks the plan so it reflects the user's intent at the start of the
 // day. The minutes setting still triggers a rebuild when changed.
-// Bump this whenever buildTodaySession changes its STRUCTURE, so a session cached
-// under the old logic is discarded and rebuilt. v3 = teach-first sequence.
-const TODAY_SESSION_VERSION = 3;
+// ===== BUILD 2 (A25): adult-life vocabulary breadth into the teaching frontier =====
+// Lo Studente found about 80% of the vocabulary orphaned from instruction: real,
+// themed words in VOCAB that no COURSE lesson references, so buildTodaySession never
+// taught them and they never reached spaced review. Build 2 routes those orphaned
+// adult-life themes into the new-word frontier (appended AFTER the structured course,
+// so the course is always taught first) and, by teaching them, into the spaced-review
+// engine (a word touched by updateVocabFragility enters the weak and due pools on its
+// own). Domain order DECIDED by Kobi, top enters the daily path first:
+const BUILD2_THEME_ORDER = [
+  // 1. Self-expression and opinions
+  'abstract', 'feelings', 'daily',
+  // 2. Work and business
+  'work',
+  // 3. Home, hosting, hospitality
+  'home', 'design', 'celebrations', 'hosting',
+  // 4. Image and style
+  'clothing', 'hair',
+  // 5. Food and going out
+  'food', 'restaurant', 'shopping',
+  // 6. Travel and getting around
+  'places', 'transport', 'city', 'vacation',
+  // 7. Health and body
+  'body', 'health'
+];
+// Every vocab id the structured course already introduces, so the breadth tail never
+// re-queues a word taught in course position (those keep their course slot).
+const COURSE_VOCAB_IDS = (function () {
+  const set = new Set();
+  if (typeof COURSE !== 'undefined') {
+    COURSE.forEach(ch => ch.lessons.forEach(l => { if (l.type === 'vocab' && Array.isArray(l.vocabIds)) l.vocabIds.forEach(id => set.add(id)); }));
+  }
+  return set;
+})();
+// The orphaned adult-life words, in the decided domain order, each theme in VOCAB
+// order, paired with level so frontier gating needs no per-call lookup. This is the
+// breadth frontier the daily session draws from once the course frontier is spent.
+const THEME_FRONTIER_ORDER = (function () {
+  const arr = [];
+  if (typeof VOCAB !== 'undefined') {
+    BUILD2_THEME_ORDER.forEach(theme => {
+      VOCAB.forEach(v => { if (v.theme === theme && !COURSE_VOCAB_IDS.has(v.id)) arr.push({ id: v.id, level: v.level }); });
+    });
+  }
+  return arr;
+})();
+
+// Bump this whenever buildTodaySession changes its STRUCTURE or its word-selection
+// logic, so a session cached under the old logic is discarded and rebuilt.
+// v4 = teach-first + speak step; v5 = adult-life breadth frontier (Build 2 / A25).
+const TODAY_SESSION_VERSION = 5;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
   if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
@@ -9845,12 +9918,24 @@ function buildTodaySession(minutes) {
   }
   const realInScope = (id) => { const v = VOCAB.find(x => x.id === id); return v && isAtOrBelowLevel(v.level, cap); };
   const isUntouched = (id) => { const sv = STATE.vocab[id]; return !sv || (sv.attempts === 0 && sv.fragility === 0.8); };
-  // New words = the next untouched words along the curriculum (the teaching frontier).
-  const newVocab = courseVocabOrder.filter(id => realInScope(id) && isUntouched(id));
+  // Breadth cap rises with demonstrated practice (highest touched level + 1), so the
+  // adult-life tail unlocks past the A2.2 course ceiling without over-reaching a
+  // beginner. A word is in scope for the day if it sits at/below either the
+  // course-position cap or this demonstrated-progress cap.
+  const breadthCap = userLevelCap();
+  const inAnyScope = (id) => { const v = VOCAB.find(x => x.id === id); return v && (isAtOrBelowLevel(v.level, cap) || isAtOrBelowLevel(v.level, breadthCap)); };
+  // Course frontier: the next untouched course words at/below the course cap (unchanged).
+  const courseNew = courseVocabOrder.filter(id => realInScope(id) && isUntouched(id));
+  // Breadth frontier: orphaned adult-life themes in the decided domain order, gated by
+  // the demonstrated-progress cap, untouched only. Reached once the course frontier for
+  // the current cap is spent, because the course words are listed first.
+  const themedNew = THEME_FRONTIER_ORDER.filter(e => isAtOrBelowLevel(e.level, breadthCap) && isUntouched(e.id)).map(e => e.id);
+  // The full teaching frontier: structured course first, then adult-life breadth.
+  const newVocab = [...courseNew, ...themedNew];
   // Day's words: a few new ones to learn, then weak and due ones to reinforce.
-  let dayVocabIds = [...new Set([...newVocab.slice(0, 4), ...weakIds, ...dueIds, ...newVocab.slice(4)])].filter(realInScope).slice(0, 6);
+  let dayVocabIds = [...new Set([...newVocab.slice(0, 4), ...weakIds, ...dueIds, ...newVocab.slice(4)])].filter(inAnyScope).slice(0, 6);
   if (dayVocabIds.length < 4) {
-    const extra = candidates.map(c => c.id).filter(id => !dayVocabIds.includes(id) && realInScope(id));
+    const extra = candidates.map(c => c.id).filter(id => !dayVocabIds.includes(id) && inAnyScope(id));
     dayVocabIds = [...new Set([...dayVocabIds, ...extra])].slice(0, 6);
   }
   // Verbs of the day: next untouched verbs along the curriculum, then weak verbs.
@@ -9869,7 +9954,7 @@ function buildTodaySession(minutes) {
     else dayGrammarId = (GRAMMAR_ORDER || []).find(unviewed) || chapGrammarId || null;
   }
   // Closing review pool: today's new words mixed with the weakest ones.
-  const reviewIds = [...new Set([...weakIds, ...dayVocabIds])].filter(realInScope).slice(0, 8);
+  const reviewIds = [...new Set([...weakIds, ...dayVocabIds])].filter(inAnyScope).slice(0, 8);
   const dayVerbVocabIds = dayVerbKeys.map(inf => { const v = VOCAB.find(x => x.pos === 'verb' && x.it === inf); return v ? v.id : null; }).filter(Boolean);
   // Reading: prefer the current chapter's own (unread) story, so reading it in the
   // flow ticks the course story lesson. The story reader (kind 'story') has no
@@ -9898,6 +9983,11 @@ function buildTodaySession(minutes) {
   }
   // 4. Practice (core) over today's words and verbs
   s.push({ id: 'today_practice', kind: 'practice', refId: 'day_practice', icon: 'P', title: 'Practice', sub: "Drills on today's words and verbs", mins: 8 });
+  // 4b. Speak: say today's words and sentences aloud. The daily PRODUCTION step, so
+  // a learner actually speaks every day instead of only recognizing.
+  if (dayVocabIds.length > 0) {
+    s.push({ id: 'today_speak', kind: 'speak', refId: 'day_speak', icon: '🎤', title: 'Parla', sub: "Say today's words and sentences aloud", mins: 5 });
+  }
   // 5. Read a level-appropriate story (chapter's own first, else a standalone one)
   if (minutes >= 30) {
     let story = null;
@@ -9984,7 +10074,7 @@ function startTodayItem(kind, refId, itemId, chapterId) {
   // entry treats "the user started this step" as completion, which is what
   // they actually do day-to-day. Practice and conversa kinds keep the
   // completion-on-end logic because they have clean terminal screens.
-  if (kind === 'lesson' || kind === 'story' || kind === 'book' || kind === 'parlare' || kind === 'teachVocab' || kind === 'teachVerbs' || kind === 'teachGrammar') {
+  if (kind === 'lesson' || kind === 'story' || kind === 'book' || kind === 'parlare' || kind === 'teachVocab' || kind === 'teachVerbs' || kind === 'teachGrammar' || kind === 'speak') {
     markTodayStepComplete(itemId);
   }
   if (kind === 'practice') {
@@ -10017,6 +10107,8 @@ function startTodayItem(kind, refId, itemId, chapterId) {
     navigate('todayTeachVerbs', { fromToday: true, todayItemId: itemId });
   } else if (kind === 'teachGrammar') {
     navigate('todayTeachGrammar', { fromToday: true, todayItemId: itemId, grammarId: refId });
+  } else if (kind === 'speak') {
+    navigate('todaySpeak', { fromToday: true, todayItemId: itemId });
   } else if (kind === 'lesson') navigate('lesson', { lessonId: refId, chapterId, ...ctx });
   else if (kind === 'story') navigate('story', { storyId: refId, ...ctx });
   else if (kind === 'conversa') {
@@ -10175,6 +10267,148 @@ function renderTodayTeachGrammar() {
       <button class="btn btn-ghost btn-sm" style="margin-top:14px;" onclick="navigate('grammar', {grammarTopic:'${gid}', fromTodayGrammar:true})">See the full topic →</button>
     </div>
     ${todayFlowFooter('Make sense? Next: practice.')}`;
+}
+
+// ===== TODAY SPEAKING STEP (A24) =====
+// The daily PRODUCTION step. Built from today's own words and sentences so the
+// learner says what they just learned. Level-gated per word: new or weak words
+// are "repeat after me" with the Italian shown; familiar words are produced from
+// the English prompt with the Italian hidden until reveal. Where the microphone
+// is available it listens and gives an honest assessment; where it is not (the
+// claude.ai frame, a local file, or iPhone Safari at times) it falls back to a
+// deliberate say-it-then-reveal self-check. The step never blocks the daily flow.
+
+function normSpeak(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function speakSimilarity(said, target) {
+  const a = normSpeak(said), b = normSpeak(target);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const d = levenshtein(a, b);
+  return Math.max(0, 1 - d / Math.max(a.length, b.length));
+}
+function speakVerdict(said, target) {
+  const sim = speakSimilarity(said, target);
+  if (sim >= 0.85) return { label: 'Spot on', sim };
+  if (sim >= 0.6) return { label: 'Close, listen and refine', sim };
+  return { label: 'Not quite, try again', sim };
+}
+function buildTodaySpeakItems() {
+  const ids = (STATE._todayPool && STATE._todayPool.dayVocabIds) || [];
+  const items = [];
+  ids.forEach(id => {
+    const v = VOCAB.find(x => x.id === id);
+    if (!v) return;
+    const sv = STATE.vocab[id];
+    const frag = sv ? sv.fragility : 0.8;
+    const fresh = !sv || sv.attempts === 0 || frag >= 0.6;
+    if (v.ex && v.ex.it && v.ex.en) items.push({ it: v.ex.it, en: v.ex.en, gloss: v.it, fresh });
+    else items.push({ it: v.it, en: v.en, gloss: '', fresh });
+  });
+  return items.slice(0, 6);
+}
+function micUsable() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition) && !inSandboxedFrame();
+}
+function todaySpeakListen() {
+  const sp = STATE._todaySpeak;
+  if (!sp) return;
+  const item = sp.items[sp.idx];
+  if (!item) return;
+  startVoiceRecognition(
+    (transcript) => { sp.heard = { text: transcript, verdict: speakVerdict(transcript, item.it) }; sp.revealed = true; render(); },
+    () => {}
+  );
+}
+function todaySpeakReveal() { if (STATE._todaySpeak) { STATE._todaySpeak.revealed = true; render(); } }
+function todaySpeakNext() {
+  const sp = STATE._todaySpeak;
+  if (!sp) return;
+  sp.idx++; sp.revealed = false; sp.heard = null;
+  render();
+}
+function renderTodaySpeak() {
+  renderCrumb([{ label: 'Today', action: `navHome('today')` }, { label: 'Parla' }]);
+  if (!STATE._todaySpeak || STATE._todaySpeak.day !== todayDateStr() || !Array.isArray(STATE._todaySpeak.items)) {
+    STATE._todaySpeak = { items: buildTodaySpeakItems(), idx: 0, revealed: false, heard: null, day: todayDateStr() };
+  }
+  const sp = STATE._todaySpeak;
+  const total = sp.items.length;
+  if (total === 0 || sp.idx >= total) {
+    main.innerHTML = `
+      <button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">&larr; Today's list</button>
+      <div class="eyebrow">Today &middot; Parla</div>
+      <h1 class="h1" style="margin-bottom:8px;">${total === 0 ? 'Nothing to say today.' : 'Well spoken.'}</h1>
+      <p class="lede" style="max-width:720px;">${total === 0 ? 'No words queued to speak today.' : "You produced today's words aloud. That is the part that builds real speaking."}</p>
+      ${todayFlowFooter(total === 0 ? '' : 'Nicely done. Next:')}`;
+    return;
+  }
+  const item = sp.items[sp.idx];
+  const escIt = jsArg(item.it);
+  const listenBtns = `
+    <div style="display:flex; gap:8px; margin:12px 0;">
+      <button class="btn btn-ghost" onclick="speak('${escIt}')" style="flex:1;">&#9656; Listen</button>
+      <button class="btn btn-ghost" onclick="speak('${escIt}', {rate:0.65})" style="flex:1;">&#128034; Slow</button>
+    </div>`;
+  const micBtn = micUsable()
+    ? `<button class="btn btn-primary" onclick="todaySpeakListen()" style="width:100%; padding:14px;">&#127908; Speak and check</button>`
+    : '';
+  let body;
+  if (!sp.revealed) {
+    if (item.fresh) {
+      body = `
+        <div style="font-size:11px; color:var(--ink-3); letter-spacing:0.6px; text-transform:uppercase; margin-bottom:10px;">Listen, then say it aloud</div>
+        <div style="color:var(--ink-2); font-style:italic; font-size:16px; margin-bottom:6px;">${htmlText(item.en)}</div>
+        <div class="it" style="font-family:var(--display); font-size:24px; color:var(--ink-1); font-weight:600; line-height:1.4;">${item.it}</div>
+        ${listenBtns}
+        ${micBtn}
+        <button class="btn btn-ghost" onclick="todaySpeakReveal()" style="width:100%; margin-top:8px;">I said it &rarr;</button>`;
+    } else {
+      body = `
+        <div style="font-size:11px; color:var(--ink-3); letter-spacing:0.6px; text-transform:uppercase; margin-bottom:10px;">Say this in Italian</div>
+        <div style="color:var(--ink-1); font-size:20px; font-weight:500; margin-bottom:14px;">${htmlText(item.en)}</div>
+        ${micBtn}
+        <button class="btn btn-ghost" onclick="todaySpeakReveal()" style="width:100%; margin-top:8px;">Reveal the answer &rarr;</button>`;
+    }
+  } else {
+    const heard = sp.heard;
+    const verdictHtml = heard
+      ? `<div style="text-align:center; margin:10px 0; padding:10px; border-radius:var(--r-sm); background:var(--accent-wash);">
+           <div style="font-weight:600; color:var(--ink-1);">${htmlText(heard.verdict.label)}</div>
+           <div style="font-size:12.5px; color:var(--ink-3); margin-top:4px;">Heard: ${htmlText(heard.text)}</div>
+         </div>`
+      : '';
+    body = `
+      <div style="text-align:center; padding:6px 0;">
+        <div style="font-size:11px; color:var(--ink-3); letter-spacing:0.6px; text-transform:uppercase; margin-bottom:8px;">Model answer</div>
+        <div class="it" style="font-family:var(--display); font-size:24px; color:var(--ink-1); font-weight:600; line-height:1.4; margin-bottom:6px;">${item.it}</div>
+        <div style="color:var(--ink-3); font-style:italic; font-size:15px;">${htmlText(item.en)}</div>
+      </div>
+      ${verdictHtml}
+      ${listenBtns}
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="todaySpeakNext()" style="flex:1;">Needs work</button>
+        <button class="btn btn-primary btn-sm" onclick="todaySpeakNext()" style="flex:1;">Got it, next &rarr;</button>
+      </div>`;
+  }
+  main.innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">&larr; Today's list</button>
+    <div class="eyebrow">Today &middot; Parla &middot; ${sp.idx + 1} of ${total}</div>
+    <h1 class="h1" style="margin-bottom:8px;">Say it aloud.</h1>
+    <p class="lede" style="max-width:720px;">Producing today's words by speaking them is what turns recognition into real speaking. ${micUsable() ? 'Tap the mic to get checked, or just say it and reveal.' : 'Say each one aloud, then reveal and check yourself.'}</p>
+    <div class="card" style="max-width:640px; margin-top:18px; padding:22px;">${body}</div>`;
+}
+function speakingDrillListen() {
+  const drill = STATE.speakingDrill;
+  if (!drill) return;
+  const item = drill.items[drill.idx];
+  if (!item) return;
+  startVoiceRecognition(
+    (t) => { drill.heard = { text: t, verdict: speakVerdict(t, item.it) }; drill.revealed = true; render(); },
+    () => {}
+  );
 }
 
 // ==== COURSE ====
@@ -10860,6 +11094,7 @@ function onVocabSearchInput(val) {
 function renderVocabTheme() {
   const themeId = STATE.context?.themeId;
   const theme = THEMES.find(t => t.id === themeId);
+  if (!theme) return navHome('vocab');
   const words = VOCAB.filter(v => v.theme === themeId).sort((a,b)=>a.it.localeCompare(b.it));
   renderCrumb([{ label: 'Vocab', action: `navHome('vocab')` }, { label: theme.name }]);
   main.innerHTML = `
@@ -13650,7 +13885,6 @@ function skipVerbDrill() {
 }
 
 function renderVerbDrillComplete() {
-  if (!STATE.verbDrill) return navHome('practice');
   const drill = STATE.verbDrill;
   const pct = Math.round((drill.correct / drill.items.length) * 100);
   main.innerHTML = `
@@ -13795,6 +14029,7 @@ function renderSpeakingDrill() {
   if (!drill || drill.idx >= drill.items.length) return renderSpeakingDrillComplete();
   const item = drill.items[drill.idx];
   const revealed = drill.revealed;
+  const micOk = !!(window.SpeechRecognition || window.webkitSpeechRecognition) && !inSandboxedFrame();
   main.innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="STATE.speakingDrill=null; navHome('practice')" style="margin-bottom:14px;">← Exit drill</button>
     <div class="card" style="max-width:640px; margin:0 auto;">
@@ -13808,10 +14043,12 @@ function renderSpeakingDrill() {
           <button class="btn btn-ghost" onclick="speak('${item.it.replace(/'/g, "\\'")}')" style="flex:1;">▸ Hint (listen)</button>
           <button class="btn btn-ghost" onclick="speak('${item.it.replace(/'/g, "\\'")}', {rate:0.65})" style="flex:1;">🐢 Slow hint</button>
         </div>
-        <button class="btn btn-primary" onclick="STATE.speakingDrill.revealed=true; render()" style="width:100%; padding:14px;">I said it: reveal model answer</button>
+        ${micOk ? `<button class="btn btn-primary" onclick="speakingDrillListen()" style="width:100%; padding:14px; margin-bottom:8px;">&#127908; Speak and check</button>` : ''}
+        <button class="btn ${micOk ? 'btn-ghost' : 'btn-primary'}" onclick="STATE.speakingDrill.revealed=true; render()" style="width:100%; padding:14px;">I said it: reveal model answer</button>
       ` : `
         <div style="text-align:center; padding:14px 0;">
-          <div style="font-size:11px; color:var(--ink-3); letter-spacing:0.6px; text-transform:uppercase; margin-bottom:8px;">Model answer: how did you do?</div>
+          <div style="font-size:11px; color:var(--ink-3); letter-spacing:0.6px; text-transform:uppercase; margin-bottom:8px;">${drill.heard ? htmlText(drill.heard.verdict.label) + ' &middot; model answer' : 'Model answer: how did you do?'}</div>
+          ${drill.heard ? `<div style="font-size:12.5px; color:var(--ink-3); margin-bottom:8px;">Heard: ${htmlText(drill.heard.text)}</div>` : ''}
           <div style="font-family:var(--display); font-size:24px; color:var(--ink-1); font-weight:600; line-height:1.4; margin-bottom:8px;">${item.it}</div>
           <div style="color:var(--ink-3); font-style:italic; font-size:15px;">${item.en}</div>
         </div>
@@ -13830,12 +14067,12 @@ function renderSpeakingDrill() {
 function speakingDrillNext() {
   if (STATE.speakingDrill) {
     STATE.speakingDrill.idx++;
+    STATE.speakingDrill.heard = null;
     render();
   }
 }
 
 function renderSpeakingDrillComplete() {
-  if (!STATE.speakingDrill) return navHome('practice');
   const drill = STATE.speakingDrill;
   main.innerHTML = `
     <div class="card" style="max-width:560px; margin:0 auto; text-align:center; padding:40px 30px;">
@@ -15147,7 +15384,6 @@ function nextExercise() {
   render();
 }
 function renderExerciseComplete() {
-  if (!STATE.exerciseSession) return navHome('practice');
   const sess = STATE.exerciseSession;
   const correct = sess.results.filter(r => r).length;
   const total = sess.items.length;
