@@ -9832,10 +9832,27 @@ const THEME_FRONTIER_ORDER = (function () {
   return arr;
 })();
 
+// ===== BUILD 3 (A26): grammar production into Today + order reconciliation =====
+// Lo Studente's third gap: grammar was READ in Today, never PRODUCED, and the daily
+// grammar frontier walked GRAMMAR_ORDER (a 40-topic dependency map that includes 21
+// reference-only topics with no drill bank), which is a DIFFERENT sequence than the
+// Course tab teaches. COURSE_GRAMMAR_ORDER is the grammar topics the structured course
+// actually teaches, in course order, so Today and Course now walk one grammar sequence.
+// Every id here has a GRAMMAR_EX drill bank (the course-taught set equals the banked
+// set), so the daily grammar production step always has real exercises.
+const COURSE_GRAMMAR_ORDER = (function () {
+  const seen = new Set(); const arr = [];
+  if (typeof COURSE !== 'undefined') {
+    COURSE.forEach(ch => ch.lessons.forEach(l => { if (l.type === 'grammar' && l.grammarId && !seen.has(l.grammarId)) { seen.add(l.grammarId); arr.push(l.grammarId); } }));
+  }
+  return arr;
+})();
+
 // Bump this whenever buildTodaySession changes its STRUCTURE or its word-selection
 // logic, so a session cached under the old logic is discarded and rebuilt.
-// v4 = teach-first + speak step; v5 = adult-life breadth frontier (Build 2 / A25).
-const TODAY_SESSION_VERSION = 5;
+// v4 = teach-first + speak step; v5 = adult-life breadth frontier (Build 2 / A25);
+// v6 = grammar production step + course-order grammar frontier (Build 3 / A26).
+const TODAY_SESSION_VERSION = 6;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
   if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
@@ -9951,7 +9968,7 @@ function buildTodaySession(minutes) {
   if (typeof GRAMMAR !== 'undefined') {
     const unviewed = (gid) => gid && GRAMMAR[gid] && !(STATE.grammar[gid] && STATE.grammar[gid].viewed);
     if (unviewed(chapGrammarId)) dayGrammarId = chapGrammarId;
-    else dayGrammarId = (GRAMMAR_ORDER || []).find(unviewed) || chapGrammarId || null;
+    else dayGrammarId = COURSE_GRAMMAR_ORDER.find(unviewed) || chapGrammarId || null;
   }
   // Closing review pool: today's new words mixed with the weakest ones.
   const reviewIds = [...new Set([...weakIds, ...dayVocabIds])].filter(inAnyScope).slice(0, 8);
@@ -9977,9 +9994,16 @@ function buildTodaySession(minutes) {
   if (dayVerbKeys.length > 0) {
     s.push({ id: 'teach_verbs', kind: 'teachVerbs', refId: 'day_verbs', icon: 'N', title: 'Verbi del giorno', sub: `${dayVerbKeys.length} verb${dayVerbKeys.length===1?'':'s'}, present tense`, mins: 4 });
   }
-  // 3. Grammar moment (teach)
+  // 3. Grammar moment (teach/read the rule)
   if (dayGrammarId) {
     s.push({ id: `teach_grammar_${dayGrammarId}`, kind: 'teachGrammar', refId: dayGrammarId, icon: 'G', title: GRAMMAR[dayGrammarId].title, sub: 'The grammar focus, explained', mins: 4 });
+  }
+  // 3b. Grammar production (Build 3): drill the focus topic right after reading it,
+  // so grammar is PRODUCED daily (fill, conjugate, transform, translate), not only
+  // read. Present only when the topic has a real drill bank; the reconciled frontier
+  // means dayGrammarId is always a course topic, and every course topic is banked.
+  if (dayGrammarId && typeof GRAMMAR_EX !== 'undefined' && GRAMMAR_EX[dayGrammarId]) {
+    s.push({ id: 'today_grammar_practice', kind: 'practice', refId: 'day_grammar', icon: 'G', title: 'Grammar drill', sub: `Produce it: ${GRAMMAR[dayGrammarId].title}`, mins: 5 });
   }
   // 4. Practice (core) over today's words and verbs
   s.push({ id: 'today_practice', kind: 'practice', refId: 'day_practice', icon: 'P', title: 'Practice', sub: "Drills on today's words and verbs", mins: 8 });
@@ -10095,6 +10119,19 @@ function startTodayItem(kind, refId, itemId, chapterId) {
       const pool = STATE._todayPool || {};
       const ids = [...new Set([...(pool.dayVocabIds || []), ...(pool.dayVerbVocabIds || [])])];
       startExerciseSession({ source: 'today-practice', vocabIds: ids, ...ctx });
+    } else if (refId === 'day_grammar') {
+      // Grammar production (Build 3). Drill the day's focus topic via the grammar
+      // exercise bank. Today context only (no returnGrammar), so the completion
+      // screen continues the daily flow instead of bouncing to the Grammar tab.
+      const gid = (STATE._todayPool && STATE._todayPool.dayGrammarId) || null;
+      if (gid && typeof GRAMMAR_EX !== 'undefined' && GRAMMAR_EX[gid]) {
+        startExerciseSession({ source: 'grammar', grammarId: gid, ...ctx });
+      } else {
+        // No bank (should not happen with the reconciled frontier): never leave the
+        // step empty, fall back to drilling the day's words.
+        const pool = STATE._todayPool || {};
+        startExerciseSession({ source: 'today-practice', vocabIds: (pool.dayVocabIds || []), ...ctx });
+      }
     } else if (refId === 'day_review') {
       const pool = STATE._todayPool || {};
       startExerciseSession({ source: 'today-review', vocabIds: (pool.reviewIds || []), ...ctx });
