@@ -9907,7 +9907,7 @@ const COURSE_GRAMMAR_ORDER = (function () {
 // v6 = grammar production step + course-order grammar frontier (Build 3 / A26);
 // v7 = post-Chapter-14 maintenance-mode session (A27);
 // v8 = foundational-orphan frontier routed into the daily word selection (A28).
-const TODAY_SESSION_VERSION = 10;
+const TODAY_SESSION_VERSION = 11;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
   if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
@@ -10534,8 +10534,8 @@ function buildTodaySpeakItems() {
     const sv = STATE.vocab[id];
     const frag = sv ? sv.fragility : 0.8;
     const fresh = !sv || sv.attempts === 0 || frag >= 0.6;
-    if (v.ex && v.ex.it && v.ex.en) items.push({ it: v.ex.it, en: v.ex.en, gloss: v.it, fresh });
-    else items.push({ it: v.it, en: v.en, gloss: '', fresh });
+    if (v.ex && v.ex.it && v.ex.en) items.push({ it: v.ex.it, en: v.ex.en, gloss: v.it, fresh, vocabId: id });
+    else items.push({ it: v.it, en: v.en, gloss: '', fresh, vocabId: id });
   });
   return items.slice(0, 6);
 }
@@ -10553,9 +10553,18 @@ function todaySpeakListen() {
   );
 }
 function todaySpeakReveal() { if (STATE._todaySpeak) { STATE._todaySpeak.revealed = true; render(); } }
-function todaySpeakNext() {
+function todaySpeakNext(outcome) {
   const sp = STATE._todaySpeak;
   if (!sp) return;
+  // Parla score into the loop (Build 3, hole 3). The learner's self-mark (informed by
+  // the live mic verdict, which pre-highlights the matching button) feeds the SAME vocab
+  // SRS the rest of the app uses: "Needs work" raises the word's fragility, records a
+  // mistake, and resets its review interval; "Got it" lowers fragility and advances it.
+  // Weak-on-speaking words then resurface in Practice and review on their own.
+  const item = sp.items[sp.idx];
+  if (item && item.vocabId && (outcome === 'correct' || outcome === 'wrong')) {
+    updateVocabFragility(item.vocabId, outcome);
+  }
   sp.idx++; sp.revealed = false; sp.heard = null;
   render();
 }
@@ -10610,6 +10619,13 @@ function renderTodaySpeak() {
            <div style="font-size:12.5px; color:var(--ink-3); margin-top:4px;">Heard: ${htmlText(heard.text)}</div>
          </div>`
       : '';
+    // Parla score into the loop (Build 3, hole 3): the live mic verdict pre-highlights the
+    // matching self-mark button, so a low-similarity reading nudges "Needs work" and a good
+    // one nudges "Got it". The button the learner taps is what records into the vocab SRS.
+    const heardSim = (heard && heard.verdict && typeof heard.verdict.sim === 'number') ? heard.verdict.sim : null;
+    const recNeedsWork = heardSim !== null && heardSim < 0.6;
+    const needsWorkCls = recNeedsWork ? 'btn-primary' : 'btn-ghost';
+    const gotItCls = recNeedsWork ? 'btn-ghost' : 'btn-primary';
     body = `
       <div style="text-align:center; padding:6px 0;">
         <div style="font-size:11px; color:var(--ink-3); letter-spacing:0.6px; text-transform:uppercase; margin-bottom:8px;">Model answer</div>
@@ -10619,8 +10635,8 @@ function renderTodaySpeak() {
       ${verdictHtml}
       ${listenBtns}
       <div style="display:flex; gap:8px; margin-top:8px;">
-        <button class="btn btn-ghost btn-sm" onclick="todaySpeakNext()" style="flex:1;">Needs work</button>
-        <button class="btn btn-primary btn-sm" onclick="todaySpeakNext()" style="flex:1;">Got it, next &rarr;</button>
+        <button class="btn ${needsWorkCls} btn-sm" onclick="todaySpeakNext('wrong')" style="flex:1;">Needs work</button>
+        <button class="btn ${gotItCls} btn-sm" onclick="todaySpeakNext('correct')" style="flex:1;">Got it, next &rarr;</button>
       </div>`;
   }
   main.innerHTML = `
