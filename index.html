@@ -9881,7 +9881,7 @@ const COURSE_GRAMMAR_ORDER = (function () {
 // v6 = grammar production step + course-order grammar frontier (Build 3 / A26);
 // v7 = post-Chapter-14 maintenance-mode session (A27);
 // v8 = foundational-orphan frontier routed into the daily word selection (A28).
-const TODAY_SESSION_VERSION = 8;
+const TODAY_SESSION_VERSION = 9;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
   if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
@@ -10078,7 +10078,8 @@ function buildTodaySession(minutes) {
   }
   // 2. Verbs of the day (teach)
   if (dayVerbKeys.length > 0) {
-    s.push({ id: 'teach_verbs', kind: 'teachVerbs', refId: 'day_verbs', icon: 'N', title: 'Verbi del giorno', sub: `${dayVerbKeys.length} verb${dayVerbKeys.length===1?'':'s'}, present tense`, mins: 4 });
+    const utc = ((typeof unlockedTenses === 'function') ? unlockedTenses() : ['presente']).length;
+    s.push({ id: 'teach_verbs', kind: 'teachVerbs', refId: 'day_verbs', icon: 'N', title: 'Verbi del giorno', sub: `${dayVerbKeys.length} verb${dayVerbKeys.length===1?'':'s'}, ${utc <= 1 ? 'present tense' : utc + ' tenses'}`, mins: 4 });
   }
   // 3. Grammar moment (teach/read the rule)
   if (dayGrammarId) {
@@ -10333,18 +10334,56 @@ function renderTodayTeachVocab() {
     <div style="max-width:760px; margin-top:18px;">${cards || '<div class="text-muted">No words queued today.</div>'}</div>
     ${todayFlowFooter('Learned these? Next: your verbs of the day.')}`;
 }
+// ===== VERB TENSE PROGRESSION (Build 3, hole 1) =====
+// The daily verb step (teach card plus the conjugate drills in Practice) used to be
+// locked to the present tense. These helpers open it up WITHOUT ever drilling a tense
+// before its rule was taught: a past or future tense becomes available only once its
+// governing grammar topic has been viewed. Present is always available.
+function unlockedTenses() {
+  const out = ['presente'];
+  const viewed = (gid) => !!(typeof STATE !== 'undefined' && STATE.grammar && STATE.grammar[gid] && STATE.grammar[gid].viewed);
+  // [grammar topic id, CONJUGATIONS tense key], in teaching order.
+  [['past_prossimo', 'passato'], ['imperfetto', 'imperfetto'], ['future_simple', 'futuro'], ['conditional', 'condizionale']]
+    .forEach(([gid, tense]) => { if (viewed(gid)) out.push(tense); });
+  return out;
+}
+// Reduce a conjugation form to the masculine form Kobi voices. The passato carries
+// gender slashes for essere verbs ('sono andato/a' to 'sono andato', 'siamo andati/e'
+// to 'siamo andati'); avere forms ('ho fatto') have no slash and pass through. Only
+// the masculine form is ever shown or accepted, per the hard rule.
+function masculineForm(form) {
+  if (!form) return form;
+  return String(form).replace(/([a-zà-ù])\/[ae](?![a-zà-ù])/gi, '$1').replace(/\s+/g, ' ').trim();
+}
+// Accepted typed answers for a conjugation drill: the exact accented form plus an
+// accent-stripped alias, so heavily accented futuro and passato forms (andro, sara)
+// stay typeable on a phone without loosening the shared answer checker. Display always
+// uses the accented form.
+function conjAcceptedAnswers(form) {
+  const f = String(form).toLowerCase().trim();
+  const bare = f.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return bare !== f ? [f, bare] : [f];
+}
 function renderTodayTeachVerbs() {
   renderCrumb([{ label: 'Today', action: `navHome('today')` }, { label: 'Verbi del giorno' }]);
   const keys = (STATE._todayPool && STATE._todayPool.dayVerbKeys) || [];
   const persons = [['io','io'],['tu','tu'],['lui','lui/lei'],['noi','noi'],['voi','voi'],['loro','loro']];
+  const tenses = unlockedTenses();
+  const tenseLabel = { presente:'Presente', passato:'Passato prossimo', imperfetto:'Imperfetto', futuro:'Futuro', condizionale:'Condizionale' };
   const cards = keys.map(k => {
     const verb = CONJUGATIONS[k];
     if (!verb) return '';
-    const pres = verb.presente || {};
-    const rows = persons.map(([p, lbl]) => `<div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--line);">
-        <span style="color:var(--ink-3);">${lbl}</span>
-        <span class="it" style="font-weight:600; color:var(--accent);">${pres[p] || '-'}</span>
-      </div>`).join('');
+    const blocks = tenses.filter(t => verb[t]).map((t, ti) => {
+      const tbl = verb[t] || {};
+      const rows = persons.map(([p, lbl]) => `<div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--line);">
+          <span style="color:var(--ink-3);">${lbl}</span>
+          <span class="it" style="font-weight:600; color:var(--accent);">${masculineForm(tbl[p]) || '-'}</span>
+        </div>`).join('');
+      return `<div style="margin-top:${ti === 0 ? '0' : '16px'};">
+        <div style="font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">${tenseLabel[t] || t}</div>
+        ${rows}
+      </div>`;
+    }).join('');
     return `<div class="card" style="margin:0 0 12px; padding:16px 18px;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:8px;">
         <div class="h3" style="margin:0;">${verb.infinitive}</div>
@@ -10353,15 +10392,18 @@ function renderTodayTeachVerbs() {
         <button class="btn-icon-audio" style="margin-left:auto;" onclick="speak('${jsArg(verb.infinitive)}')" title="Listen">▸</button>
       </div>
       <div style="font-size:14px; color:var(--ink-2); margin-bottom:10px;">${htmlText(verb.english)}</div>
-      <div style="font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Presente</div>
-      ${rows}
+      ${blocks}
     </div>`;
   }).join('');
+  const tenseNames = tenses.map(t => tenseLabel[t] || t).join(', ');
+  const lede = tenses.length <= 1
+    ? 'Drawn from your chapter and the verbs your progress flags as weak. Learn the present tense here; open any verb for all six tenses.'
+    : `Drawn from your chapter and the verbs your progress flags as weak. Tenses you have unlocked so far: ${tenseNames}. Open any verb for all six tenses.`;
   main.innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="navHome('today')" style="margin-bottom:14px;">← Today's list</button>
     <div class="eyebrow">Today · Step 2 · Verbi del giorno</div>
     <h1 class="h1" style="margin-bottom:8px;">Verbs for today.</h1>
-    <p class="lede" style="max-width:720px;">Drawn from your chapter and the verbs your progress flags as weak. Learn the present tense here; open any verb for all six tenses.</p>
+    <p class="lede" style="max-width:720px;">${lede}</p>
     <div style="max-width:760px; margin-top:18px;">${cards || '<div class="text-muted">No verbs queued today.</div>'}</div>
     ${todayFlowFooter('Got these? Next: the grammar focus.')}`;
 }
@@ -14915,19 +14957,33 @@ function generateExercises(opts) {
   // carries the spelling rules (mangi, mangiamo, cerchi, paghi). We never
   // rebuild a form from stem+ending here: that previously taught wrong forms
   // like "mangii"/"mangiiamo". A verb not present in the table is simply skipped
-  // for this exercise rather than risking an unverified form.
+  // for this exercise rather than risking an unverified form. The drilled TENSE is
+  // chosen from unlockedTenses() (present plus any past/future tense whose grammar
+  // rule has been viewed), weighted toward present, so production grows past the
+  // present tense exactly as the learner progresses. passato forms are reduced to
+  // Kobi's masculine form, and an accent-stripped answer alias keeps futuro forms
+  // typeable on a phone.
   const verbsForConj = pool.filter(v => v.pos === 'verb' && (v.it.endsWith('are') || v.it.endsWith('ere') || v.it.endsWith('ire')) && !/(arsi|ersi|irsi)$/.test(v.it) && !v.it.includes(' '));
   const conjPersons = ['io', 'tu', 'lui', 'noi', 'voi', 'loro'];
+  const conjUnlocked = (typeof unlockedTenses === 'function') ? unlockedTenses() : ['presente'];
+  const conjTenseLabel = { presente:'presente', passato:'passato prossimo', imperfetto:'imperfetto', futuro:'futuro', condizionale:'condizionale' };
+  const conjTenseWeighted = [];
+  conjUnlocked.forEach(t => { const w = (t === 'presente') ? 2 : 1; for (let i = 0; i < w; i++) conjTenseWeighted.push(t); });
   verbsForConj.forEach(v => {
     if (items.filter(i => i.type === 'conjugate').length >= 2) return;
-    const table = CONJUGATIONS[v.it] && CONJUGATIONS[v.it].presente;
-    if (!table) return;
-    const avail = conjPersons.filter(p => table[p]);
+    const conj = CONJUGATIONS[v.it];
+    if (!conj) return;
+    const tenseChoices = conjTenseWeighted.filter(t => conj[t]);
+    if (!tenseChoices.length) return;
+    const tense = tenseChoices[Math.floor(Math.random() * tenseChoices.length)];
+    const table = conj[tense];
+    const avail = conjPersons.filter(p => table[p] && table[p] !== '-');
     if (!avail.length) return;
     const person = avail[Math.floor(Math.random() * avail.length)];
-    const correctForm = table[person];
+    const correctForm = masculineForm(table[person]);
     if (!correctForm) return;
-    items.push({ type: 'conjugate', vocabId: v.id, audioText: correctForm, prompt: `Conjugate <em>${v.it}</em> for <strong>${person}</strong>: <span class="it">${person} ___</span>`, correct: [String(correctForm).toLowerCase().trim()], explain: `${person} ${correctForm}. Infinitive: ${v.it} (${v.en}).` });
+    const tl = conjTenseLabel[tense] || tense;
+    items.push({ type: 'conjugate', vocabId: v.id, audioText: correctForm, prompt: `Conjugate <em>${v.it}</em> (${tl}) for <strong>${person}</strong>: <span class="it">${person} ___</span>`, correct: conjAcceptedAnswers(correctForm), explain: `${person} ${correctForm} (${tl}). Infinitive: ${v.it} (${v.en}).` });
   });
   // 9. Dialogue response (1-2): conversation context with reply options
   const dialogues = [
