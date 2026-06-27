@@ -8779,6 +8779,32 @@ function updateVocabFragility(vid, outcome) {
   v.due = Date.now() + v.interval * 24 * 60 * 60 * 1000;
   saveState();
 }
+// Grammar spaced review (Build 3, hole 2). A grammar topic enters the same kind of
+// expanding-interval schedule vocab uses: a passed drill pushes the next review out
+// (1, 3, 7, 16, 35, 75 days), a missed drill resets it to tomorrow. Called once per
+// grammar drill session (the daily focus drill, the daily grammar review, or a
+// Grammar-tab drill), so any grammar production feeds the schedule. The pass bar
+// matches the lesson bar (0.7). confidence and confirmed are left untouched on
+// purpose, so this never silently marks a course grammar lesson done.
+function recordGrammarDrill(gid, pct) {
+  if (!gid || typeof GRAMMAR === 'undefined' || !GRAMMAR[gid]) return;
+  if (!STATE.grammar[gid]) STATE.grammar[gid] = {};
+  const g = STATE.grammar[gid];
+  g.viewed = true;
+  g.srsAttempts = (g.srsAttempts || 0) + 1;
+  const passed = pct >= 0.7;
+  if (passed) g.srsCorrect = (g.srsCorrect || 0) + 1;
+  const SRS_STEPS = [1, 3, 7, 16, 35, 75]; // days, identical to the vocab schedule
+  if (passed) {
+    g.srsStreak = (g.srsStreak || 0) + 1;
+    g.srsInterval = SRS_STEPS[Math.min(g.srsStreak - 1, SRS_STEPS.length - 1)];
+  } else {
+    g.srsStreak = 0;
+    g.srsInterval = 1;
+  }
+  g.srsDue = Date.now() + g.srsInterval * 24 * 60 * 60 * 1000;
+  saveState();
+}
 function getCurrentLesson() {
   for (const ch of COURSE) for (const l of ch.lessons) if (!STATE.course[l.id]?.completed) return { chapter: ch, lesson: l };
   return null;
@@ -9881,7 +9907,7 @@ const COURSE_GRAMMAR_ORDER = (function () {
 // v6 = grammar production step + course-order grammar frontier (Build 3 / A26);
 // v7 = post-Chapter-14 maintenance-mode session (A27);
 // v8 = foundational-orphan frontier routed into the daily word selection (A28).
-const TODAY_SESSION_VERSION = 9;
+const TODAY_SESSION_VERSION = 10;
 function getOrBuildTodaySession(minutes) {
   const tp = ensureTodayFresh();
   if (tp.session && tp.sessionMinutes === minutes && tp.sessionVersion === TODAY_SESSION_VERSION && Array.isArray(tp.session) && tp.session.length > 0) {
@@ -10008,6 +10034,24 @@ function buildTodaySession(minutes) {
     if (unviewed(chapGrammarId)) dayGrammarId = chapGrammarId;
     else dayGrammarId = COURSE_GRAMMAR_ORDER.find(unviewed) || chapGrammarId || null;
   }
+  // Grammar spaced review (Build 3, hole 2): a viewed, drillable topic is due when its
+  // next-review date has arrived. A viewed topic with no schedule yet (older saves, or
+  // topics learned before this feature) counts as due now, so the review loop can start
+  // and then spread the topics out over time. Today's new focus topic is excluded so the
+  // same topic is never drilled twice in one day. One topic per day, most overdue first.
+  let dueGrammarId = null;
+  if (typeof GRAMMAR_EX !== 'undefined' && typeof COURSE_GRAMMAR_ORDER !== 'undefined') {
+    const nowTs = Date.now();
+    const grammarDue = (gid) => {
+      if (!gid || gid === dayGrammarId || !GRAMMAR_EX[gid]) return false;
+      const g = STATE.grammar[gid];
+      if (!g || !g.viewed) return false;
+      return !g.srsDue || g.srsDue <= nowTs;
+    };
+    const dueList = COURSE_GRAMMAR_ORDER.filter(grammarDue)
+      .sort((a, b) => ((STATE.grammar[a].srsDue || 0) - (STATE.grammar[b].srsDue || 0)));
+    dueGrammarId = dueList[0] || null;
+  }
   // Closing review pool: today's new words mixed with the weakest ones.
   const reviewIds = [...new Set([...weakIds, ...dayVocabIds])].filter(inAnyScope).slice(0, 8);
   const dayVerbVocabIds = dayVerbKeys.map(inf => { const v = VOCAB.find(x => x.pos === 'verb' && x.it === inf); return v ? v.id : null; }).filter(Boolean);
@@ -10044,6 +10088,10 @@ function buildTodaySession(minutes) {
         s.push({ id: 'today_grammar_practice', kind: 'practice', refId: 'day_grammar', icon: 'G', title: 'Grammar drill', sub: `Produce it: ${GRAMMAR[dayGrammarId].title}`, mins: 5 });
       }
     }
+    // b2. Grammar spaced review: re-drill an earlier topic that is due (Build 3, hole 2).
+    if (dueGrammarId) {
+      s.push({ id: 'today_grammar_review', kind: 'practice', refId: 'grammar_due', icon: 'G', title: 'Grammar review', sub: `Spaced review: ${GRAMMAR[dueGrammarId].title}`, mins: 5 });
+    }
     // c. Your weakest words: the spaced-review core.
     if (weakIds.length > 0) {
       s.push({ id: 'today_weak', kind: 'practice', refId: 'weak_review', icon: 'R', title: 'Your weakest words', sub: `${weakIds.length} word${weakIds.length===1?'':'s'} your progress flags as weak`, mins: 6 });
@@ -10064,7 +10112,7 @@ function buildTodaySession(minutes) {
     }
     // g. Parlare: open production, the learner's own words.
     s.push({ id: 'today_parlare', kind: 'parlare', refId: 'parlare', icon: 'W', title: 'Parlare', sub: 'Write or speak something of your own', mins: 6 });
-    STATE._todayPool = { weakIds, dueIds, dayVocabIds, dayVerbKeys, dayVerbVocabIds, dayGrammarId, reviewIds };
+    STATE._todayPool = { weakIds, dueIds, dayVocabIds, dayVerbKeys, dayVerbVocabIds, dayGrammarId, dueGrammarId, reviewIds };
     return s;
   }
 
@@ -10092,6 +10140,12 @@ function buildTodaySession(minutes) {
   if (dayGrammarId && typeof GRAMMAR_EX !== 'undefined' && GRAMMAR_EX[dayGrammarId]) {
     s.push({ id: 'today_grammar_practice', kind: 'practice', refId: 'day_grammar', icon: 'G', title: 'Grammar drill', sub: `Produce it: ${GRAMMAR[dayGrammarId].title}`, mins: 5 });
   }
+  // 3c. Grammar spaced review (Build 3, hole 2): re-drill one earlier topic whose SRS
+  // review is due, so grammar resurfaces like vocab instead of being taught once and
+  // forgotten. The new-topic drill above is excluded from the due pool.
+  if (dueGrammarId) {
+    s.push({ id: 'today_grammar_review', kind: 'practice', refId: 'grammar_due', icon: 'G', title: 'Grammar review', sub: `Spaced review: ${GRAMMAR[dueGrammarId].title}`, mins: 5 });
+  }
   // 4. Practice (core) over today's words and verbs
   s.push({ id: 'today_practice', kind: 'practice', refId: 'day_practice', icon: 'P', title: 'Practice', sub: "Drills on today's words and verbs", mins: 8 });
   // 4b. Speak: say today's words and sentences aloud. The daily PRODUCTION step, so
@@ -10111,7 +10165,7 @@ function buildTodaySession(minutes) {
     s.push({ id: 'today_review', kind: 'practice', refId: 'day_review', icon: 'R', title: 'Mixed review', sub: "Today's new words mixed with your weak ones", mins: 6 });
   }
   // Store the day's pools so startTodayItem can read them (cached for the day).
-  STATE._todayPool = { weakIds, dueIds, dayVocabIds, dayVerbKeys, dayVerbVocabIds, dayGrammarId, reviewIds };
+  STATE._todayPool = { weakIds, dueIds, dayVocabIds, dayVerbKeys, dayVerbVocabIds, dayGrammarId, dueGrammarId, reviewIds };
   return s;
 }
 // Bug #1 fix (file 07): never render "undefined min". Any step/lesson/story whose
@@ -10216,6 +10270,17 @@ function startTodayItem(kind, refId, itemId, chapterId) {
       } else {
         // No bank (should not happen with the reconciled frontier): never leave the
         // step empty, fall back to drilling the day's words.
+        const pool = STATE._todayPool || {};
+        startExerciseSession({ source: 'today-practice', vocabIds: (pool.dayVocabIds || []), ...ctx });
+      }
+    } else if (refId === 'grammar_due') {
+      // Grammar spaced review (Build 3, hole 2). Re-drill an earlier topic that is due,
+      // via the same grammar exercise bank, Today context only. The completion hook in
+      // renderExerciseComplete pushes the topic's next review out on a pass.
+      const gid = (STATE._todayPool && STATE._todayPool.dueGrammarId) || null;
+      if (gid && typeof GRAMMAR_EX !== 'undefined' && GRAMMAR_EX[gid]) {
+        startExerciseSession({ source: 'grammar', grammarId: gid, ...ctx });
+      } else {
         const pool = STATE._todayPool || {};
         startExerciseSession({ source: 'today-practice', vocabIds: (pool.dayVocabIds || []), ...ctx });
       }
@@ -15567,6 +15632,9 @@ function renderExerciseComplete() {
   const correct = sess.results.filter(r => r).length;
   const total = sess.items.length;
   const pct = total ? correct / total : 0;
+  // Grammar spaced review (Build 3, hole 2): any grammar drill (daily focus, daily
+  // review, or a Grammar-tab drill) updates the topic's SRS schedule from the pass rate.
+  if (sess.source === 'grammar' && sess.grammarId) recordGrammarDrill(sess.grammarId, pct);
   // Lessons now require a real pass (was 0.5).
   if (sess.lessonToComplete && pct >= 0.7) {
     STATE.course[sess.lessonToComplete] = { completed: true };
